@@ -1,0 +1,8 @@
+# Runtime SQLite database — created fresh by `store.Open` on every run via
+# the embedded schema. Tracking it means every local test run produces a
+# noisy binary diff with zero informational value, and eventually a
+# meaningless merge conflict. Never commit it.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
