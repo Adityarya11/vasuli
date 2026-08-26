@@ -8,9 +8,10 @@ in [`var-thon`](../var-thon).
 
 > **Status: Active development.** The core service — campaign creation,
 > queue-based session assignment, outcome handling (AGREED/PROMISED/REFUSED/
-> UNCLEAR), and the audit trail — is built and verified end-to-end via a
-> live HTTP smoke test. It is not yet wired to `var-thon` (that's the next
-> milestone) and the Razorpay integration is currently a stub, by design —
+> UNCLEAR), and the audit trail — is built and verified end-to-end. It is
+> now wired to `var-thon`: a real browser call, routed through the full
+> voice pipeline, spoke a dynamically-assigned customer's name and payment
+> details live. The Razorpay integration is currently a stub, by design —
 > see [Status](#status) below.
 
 ---
@@ -293,11 +294,12 @@ vertical slices rather than strictly sequentially.
 - [x] Campaign metrics, computed live
 - [x] Razorpay payment-link creation behind a stub (real calls in M6)
 - [x] Verified end-to-end via live HTTP smoke test (not just unit-level)
+- [x] `var-thon` wiring (`internal/recovery/client.go`, per-session profile
+      resolution in `gateway/server.go`) — verified with a real browser call
+      through the full voice pipeline; see `../docs/roadmap.md` M3
 
 **Not yet built:**
 
-- [ ] `var-thon` wiring — `internal/recovery/client.go` on the `var-thon`
-      side, and the per-session profile change in `gateway/server.go`
 - [ ] Outcome signal from Inference-Python back to Orchestrator-Go
 - [ ] Razorpay webhook consumer (`POST /webhooks/razorpay`, HMAC verification)
 - [ ] `razorpay.LiveClient` — real API calls, once test-mode keys exist

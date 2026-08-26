@@ -85,7 +85,7 @@ curl localhost:8090/api/v1/campaigns/<id>/metrics
 
 ---
 
-## M3 — Wire var-thon to Recovery Orchestrator
+## M3 — Wire var-thon to Recovery Orchestrator ✅ DONE
 
 **What:** Two files added to `var-thon/services/orchestrator-go/`. At `START_SESSION`, var-thon calls the Recovery Orchestrator and uses the returned system prompt. At session end, it reports the outcome.
 
@@ -145,7 +145,7 @@ Average TTFT (~0.51s) and STT (~0.67s) both run slightly above the receptionist-
 
 ---
 
-## M4 — Recovery Agent Profile
+## M4 — Recovery Agent Profile ✅ DONE
 
 **What:** `var-thon/configs/agent_profiles/recovery_agent.yaml`. The fallback profile used when the Recovery Orchestrator queue is empty. Also establishes the system prompt template used by the Recovery Orchestrator for rendering per-session prompts.
 
@@ -186,6 +186,23 @@ You are calling {{.CustomerName}} regarding an outstanding payment of
 ```
 
 **Definition of done:** Run a call with no campaign loaded (empty queue). The agent uses the fallback profile. Run a call with a campaign loaded. The agent uses Rahul Sharma's name and correct amount. Both calls sound like the same persona.
+
+**Verification log (26 Aug 2026, session `session_1000`, empty queue on purpose):**
+
+```
+[Gateway] session session_1000: recovery queue empty, using static profile 'Priya'.
+[InferenceEngine] [session_1000] Profile received — agent: 'Priya'
+[InferenceEngine.LLM] Sentence chunk ready: 'Namaste! This is Priya here, representing [Merchant Name] with Razorpay.'
+[InferenceEngine.LLM] Sentence chunk ready: 'How can I assist you today?'
+```
+
+Before this milestone, the empty-queue fallback was `-profile receptionist`
+(a dental-clinic persona left over from VAR) — exactly what session
+`session_59058` hit during M3 testing (`docs/build-log.md`, 26 Aug). Now
+the fallback is dignified: same Priya persona as an assigned call, just
+without a specific customer's name or amount.
+
+**Status: Complete.**
 
 ---
 
