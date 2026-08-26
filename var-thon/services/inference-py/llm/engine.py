@@ -41,7 +41,14 @@ class LLMEngine:
         messages.append({"role": "user", "content": prompt})
 
         try:
-            response = ollama.chat(model=self.model_target, messages=messages)
+            # keep_alive must match generate_stream's. Ollama applies this per
+            # request, so a call without it would reset the model's residency
+            # to the 5-minute default — silently undoing the indefinite hold
+            # that streaming calls establish, and making the next call after a
+            # demo pause pay a cold-load penalty.
+            response = ollama.chat(
+                model=self.model_target, messages=messages, keep_alive=-1
+            )
             return response.get("message", {}).get("content", "")
         except (ollama.ResponseError, httpx.RequestError) as e:
             logger.error(f"Inference failure: {e}", exc_info=True)

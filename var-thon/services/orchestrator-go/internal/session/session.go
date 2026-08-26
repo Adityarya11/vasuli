@@ -43,9 +43,17 @@ type Session struct {
 	InterruptChan  chan struct{}
 	DoneChan       chan struct{}
 
-	mu        sync.Mutex
-	closeOnce sync.Once
-	stream    pb.VoiceAgent_StreamEventsClient
+	// OutcomeChan closes once the inference engine reports its post-call
+	// classification. Distinct from DoneChan: a session can end without ever
+	// producing an outcome (engine crash, timeout, no conversation at all).
+	OutcomeChan chan struct{}
+
+	mu          sync.Mutex
+	closeOnce   sync.Once
+	outcomeOnce sync.Once
+	outcome     string
+	promiseDate string
+	stream      pb.VoiceAgent_StreamEventsClient
 }
 
 func NewSession(id string, profile *config.AgentProfile) *Session {
@@ -58,6 +66,7 @@ func NewSession(id string, profile *config.AgentProfile) *Session {
 		AgentAudioChan: make(chan []byte, 100),
 		InterruptChan:  make(chan struct{}, 1),
 		DoneChan:       make(chan struct{}),
+		OutcomeChan:    make(chan struct{}),
 	}
 }
 
@@ -105,6 +114,36 @@ func (s *Session) signalDone() {
 		close(s.DoneChan)
 		log.Printf("[Session %s] DoneChan closed.", s.ID)
 	})
+}
+
+func (s *Session) setOutcome(outcome, promiseDate string) {
+	s.mu.Lock()
+	s.outcome = outcome
+	s.promiseDate = promiseDate
+	s.mu.Unlock()
+
+	// The value is stored before the channel closes, so any reader woken by
+	// either OutcomeChan or DoneChan observes a fully-written outcome.
+	s.outcomeOnce.Do(func() {
+		close(s.OutcomeChan)
+	})
+}
+
+// Outcome returns the classified call outcome and promise date. Both are
+// empty if the inference engine never reported one — callers substitute
+// their own default rather than having one invented here.
+func (s *Session) Outcome() (string, string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.outcome, s.promiseDate
+}
+
+// SignalInputComplete half-closes the outbound direction of the inference
+// stream. No further audio will be sent, but the engine keeps its own
+// direction open — which is what lets it deliver the classified outcome
+// after the caller has already hung up.
+func (s *Session) SignalInputComplete() error {
+	return s.stream.CloseSend()
 }
 
 func (s *Session) sendAudioChunk(data []byte) error {
@@ -224,6 +263,12 @@ func (s *Session) readPump() {
 		if err != nil {
 			log.Printf("[Session %s] readPump recv error: %v", s.ID, err)
 			return
+		}
+
+		if outcome := event.GetOutcome(); outcome != nil {
+			log.Printf("[Session %s] Call outcome classified: %s", s.ID, outcome.Outcome)
+			s.setOutcome(outcome.Outcome, outcome.PromiseDate)
+			continue
 		}
 
 		if audio := event.GetAudio(); audio != nil {

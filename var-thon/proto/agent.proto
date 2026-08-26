@@ -16,6 +16,7 @@ message Event {
     AudioChunk audio = 2;
     Transcript transcript = 3;
     ControlSignal control = 4;
+    CallOutcome outcome = 5;
   }
 }
 
@@ -44,4 +45,12 @@ message ControlSignal {
 message AgentProfile {
   string agent_name = 1;
   string system_prompt = 2;
+}
+
+// CallOutcome carries the inference engine's post-call classification of
+// how a recovery conversation resolved. Sent once, immediately before the
+// engine closes its side of the stream.
+message CallOutcome {
+  string outcome = 1;      // AGREED | PROMISED | REFUSED | UNCLEAR
+  string promise_date = 2; // populated only for PROMISED; empty otherwise
 }

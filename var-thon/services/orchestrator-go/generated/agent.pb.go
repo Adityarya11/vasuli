@@ -81,6 +81,7 @@ type Event struct {
 	//	*Event_Audio
 	//	*Event_Transcript
 	//	*Event_Control
+	//	*Event_Outcome
 	Payload       isEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -157,6 +158,15 @@ func (x *Event) GetControl() *ControlSignal {
 	return nil
 }
 
+func (x *Event) GetOutcome() *CallOutcome {
+	if x != nil {
+		if x, ok := x.Payload.(*Event_Outcome); ok {
+			return x.Outcome
+		}
+	}
+	return nil
+}
+
 type isEvent_Payload interface {
 	isEvent_Payload()
 }
@@ -173,11 +183,17 @@ type Event_Control struct {
 	Control *ControlSignal `protobuf:"bytes,4,opt,name=control,proto3,oneof"`
 }
 
+type Event_Outcome struct {
+	Outcome *CallOutcome `protobuf:"bytes,5,opt,name=outcome,proto3,oneof"`
+}
+
 func (*Event_Audio) isEvent_Payload() {}
 
 func (*Event_Transcript) isEvent_Payload() {}
 
 func (*Event_Control) isEvent_Payload() {}
+
+func (*Event_Outcome) isEvent_Payload() {}
 
 type AudioChunk struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -387,11 +403,66 @@ func (x *AgentProfile) GetSystemPrompt() string {
 	return ""
 }
 
+// CallOutcome carries the inference engine's post-call classification of
+// how a recovery conversation resolved. Sent once, immediately before the
+// engine closes its side of the stream.
+type CallOutcome struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Outcome       string                 `protobuf:"bytes,1,opt,name=outcome,proto3" json:"outcome,omitempty"`                            // AGREED | PROMISED | REFUSED | UNCLEAR
+	PromiseDate   string                 `protobuf:"bytes,2,opt,name=promise_date,json=promiseDate,proto3" json:"promise_date,omitempty"` // populated only for PROMISED; empty otherwise
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CallOutcome) Reset() {
+	*x = CallOutcome{}
+	mi := &file_agent_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CallOutcome) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CallOutcome) ProtoMessage() {}
+
+func (x *CallOutcome) ProtoReflect() protoreflect.Message {
+	mi := &file_agent_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CallOutcome.ProtoReflect.Descriptor instead.
+func (*CallOutcome) Descriptor() ([]byte, []int) {
+	return file_agent_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *CallOutcome) GetOutcome() string {
+	if x != nil {
+		return x.Outcome
+	}
+	return ""
+}
+
+func (x *CallOutcome) GetPromiseDate() string {
+	if x != nil {
+		return x.PromiseDate
+	}
+	return ""
+}
+
 var File_agent_proto protoreflect.FileDescriptor
 
 const file_agent_proto_rawDesc = "" +
 	"\n" +
-	"\vagent.proto\x12\x05agent\"\xc3\x01\n" +
+	"\vagent.proto\x12\x05agent\"\xf3\x01\n" +
 	"\x05Event\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12)\n" +
@@ -399,7 +470,8 @@ const file_agent_proto_rawDesc = "" +
 	"\n" +
 	"transcript\x18\x03 \x01(\v2\x11.agent.TranscriptH\x00R\n" +
 	"transcript\x120\n" +
-	"\acontrol\x18\x04 \x01(\v2\x14.agent.ControlSignalH\x00R\acontrolB\t\n" +
+	"\acontrol\x18\x04 \x01(\v2\x14.agent.ControlSignalH\x00R\acontrol\x12.\n" +
+	"\aoutcome\x18\x05 \x01(\v2\x12.agent.CallOutcomeH\x00R\aoutcomeB\t\n" +
 	"\apayload\" \n" +
 	"\n" +
 	"AudioChunk\x12\x12\n" +
@@ -421,7 +493,10 @@ const file_agent_proto_rawDesc = "" +
 	"\fAgentProfile\x12\x1d\n" +
 	"\n" +
 	"agent_name\x18\x01 \x01(\tR\tagentName\x12#\n" +
-	"\rsystem_prompt\x18\x02 \x01(\tR\fsystemPrompt2<\n" +
+	"\rsystem_prompt\x18\x02 \x01(\tR\fsystemPrompt\"J\n" +
+	"\vCallOutcome\x12\x18\n" +
+	"\aoutcome\x18\x01 \x01(\tR\aoutcome\x12!\n" +
+	"\fpromise_date\x18\x02 \x01(\tR\vpromiseDate2<\n" +
 	"\n" +
 	"VoiceAgent\x12.\n" +
 	"\fStreamEvents\x12\f.agent.Event\x1a\f.agent.Event(\x010\x01B*Z(services/orchestrator-go/generated;agentb\x06proto3"
@@ -439,7 +514,7 @@ func file_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_agent_proto_goTypes = []any{
 	(ControlSignal_SignalType)(0), // 0: agent.ControlSignal.SignalType
 	(*Event)(nil),                 // 1: agent.Event
@@ -447,20 +522,22 @@ var file_agent_proto_goTypes = []any{
 	(*Transcript)(nil),            // 3: agent.Transcript
 	(*ControlSignal)(nil),         // 4: agent.ControlSignal
 	(*AgentProfile)(nil),          // 5: agent.AgentProfile
+	(*CallOutcome)(nil),           // 6: agent.CallOutcome
 }
 var file_agent_proto_depIdxs = []int32{
 	2, // 0: agent.Event.audio:type_name -> agent.AudioChunk
 	3, // 1: agent.Event.transcript:type_name -> agent.Transcript
 	4, // 2: agent.Event.control:type_name -> agent.ControlSignal
-	0, // 3: agent.ControlSignal.type:type_name -> agent.ControlSignal.SignalType
-	5, // 4: agent.ControlSignal.profile:type_name -> agent.AgentProfile
-	1, // 5: agent.VoiceAgent.StreamEvents:input_type -> agent.Event
-	1, // 6: agent.VoiceAgent.StreamEvents:output_type -> agent.Event
-	6, // [6:7] is the sub-list for method output_type
-	5, // [5:6] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	6, // 3: agent.Event.outcome:type_name -> agent.CallOutcome
+	0, // 4: agent.ControlSignal.type:type_name -> agent.ControlSignal.SignalType
+	5, // 5: agent.ControlSignal.profile:type_name -> agent.AgentProfile
+	1, // 6: agent.VoiceAgent.StreamEvents:input_type -> agent.Event
+	1, // 7: agent.VoiceAgent.StreamEvents:output_type -> agent.Event
+	7, // [7:8] is the sub-list for method output_type
+	6, // [6:7] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_agent_proto_init() }
@@ -472,6 +549,7 @@ func file_agent_proto_init() {
 		(*Event_Audio)(nil),
 		(*Event_Transcript)(nil),
 		(*Event_Control)(nil),
+		(*Event_Outcome)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -479,7 +557,7 @@ func file_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_agent_proto_rawDesc), len(file_agent_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

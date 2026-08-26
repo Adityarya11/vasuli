@@ -5,6 +5,7 @@ import queue
 import signal
 import sys
 import threading
+import time
 import wave
 from collections.abc import Generator
 from concurrent import futures
@@ -38,6 +39,22 @@ logger = logging.getLogger("InferenceEngine")
 CHUNK_SIZE = 4096
 _SHUTDOWN = object()
 _UTTERANCE_STOP = object()
+
+_OUTCOME_VALUES = ("AGREED", "PROMISED", "REFUSED", "UNCLEAR")
+_DEFAULT_OUTCOME = "UNCLEAR"
+
+_CLASSIFICATION_SYSTEM_PROMPT = (
+    "You classify payment recovery call outcomes. Reply with exactly one word."
+)
+
+_CLASSIFICATION_QUESTION = (
+    "Based on the conversation above, what was the customer's final outcome?\n"
+    "AGREED - customer agreed to pay now and wants a payment link\n"
+    "PROMISED - customer committed to a specific future payment date\n"
+    "REFUSED - customer explicitly declined to pay\n"
+    "UNCLEAR - no clear resolution reached\n\n"
+    "Reply with exactly one word."
+)
 VAD_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "silero_vad.onnx")
 DEFAULT_SOURCE_SAMPLE_RATE = 44100
 TTS_OUTPUT_SAMPLE_RATE = 8000
@@ -102,6 +119,7 @@ class VoiceAgentServicer(agent_pb2_grpc.VoiceAgentServicer):
             logger.info(f"[{ctx.session_id}] STT: '{user_text}'")
 
             assistant_parts: list[str] = []
+            response_pcm_bytes = 0
             for sentence in self.llm.generate_stream(
                 user_text,
                 system_override=ctx.system_prompt,
@@ -123,6 +141,7 @@ class VoiceAgentServicer(agent_pb2_grpc.VoiceAgentServicer):
                     continue
 
                 pcm_bytes = wav_to_pcm16_mono(wav_bytes)
+                response_pcm_bytes += len(pcm_bytes)
 
                 for i in range(0, len(pcm_bytes), CHUNK_SIZE):
                     chunk = pcm_bytes[i : i + CHUNK_SIZE]
@@ -142,7 +161,16 @@ class VoiceAgentServicer(agent_pb2_grpc.VoiceAgentServicer):
                 )
                 ctx.conversation_history = ctx.conversation_history[-12:]
 
-            logger.info(f"[{ctx.session_id}] Utterance response complete.")
+            # Synthesis finishes well before playback does: the edge gateway
+            # paces this audio out in real time and gates the caller's
+            # microphone for its full duration, so the useful number here is
+            # how long the caller must wait, not how long inference took.
+            playback_seconds = response_pcm_bytes / 2 / TTS_OUTPUT_SAMPLE_RATE
+            logger.info(
+                f"[{ctx.session_id}] Utterance response complete. "
+                f"{playback_seconds:.2f}s of audio queued; caller audio is gated "
+                f"at the edge until playback ends."
+            )
 
         except grpc.RpcError as e:
             logger.error(
@@ -173,10 +201,73 @@ class VoiceAgentServicer(agent_pb2_grpc.VoiceAgentServicer):
 
         ctx.utterance_queue.put(utterance_bytes)
 
+    def _classify_outcome(self, ctx: SessionContext) -> str:
+        """Classify how the call resolved, from the full conversation history.
+
+        Runs once at teardown as a single non-streaming inference. Reuses
+        LLMEngine.generate's message assembly: the classification instruction
+        becomes the system prompt, the conversation becomes history, and the
+        question becomes the final user turn.
+        """
+        if not ctx.conversation_history:
+            logger.info(
+                f"[{ctx.session_id}] No conversation history; outcome {_DEFAULT_OUTCOME}."
+            )
+            return _DEFAULT_OUTCOME
+
+        start = time.perf_counter()
+        raw = self.llm.generate(
+            prompt=_CLASSIFICATION_QUESTION,
+            system_override=_CLASSIFICATION_SYSTEM_PROMPT,
+            history=ctx.conversation_history,
+        )
+        elapsed = time.perf_counter() - start
+
+        stripped = raw.strip()
+        if not stripped:
+            logger.warning(
+                f"[{ctx.session_id}] Classifier returned nothing in {elapsed:.3f}s; "
+                f"defaulting to {_DEFAULT_OUTCOME}."
+            )
+            return _DEFAULT_OUTCOME
+
+        word = stripped.upper().split()[0].strip(".,!?:;\"'")
+
+        if word not in _OUTCOME_VALUES:
+            logger.warning(
+                f"[{ctx.session_id}] Classifier returned unrecognized outcome "
+                f"'{word}' in {elapsed:.3f}s; defaulting to {_DEFAULT_OUTCOME}."
+            )
+            return _DEFAULT_OUTCOME
+
+        logger.info(f"[{ctx.session_id}] Outcome classified as {word} in {elapsed:.3f}s.")
+        return word
+
+    def _emit_outcome(self, ctx: SessionContext) -> None:
+        try:
+            outcome = self._classify_outcome(ctx)
+        except RuntimeError as e:
+            logger.error(
+                f"[{ctx.session_id}] Outcome classification failed: {e}", exc_info=True
+            )
+            outcome = _DEFAULT_OUTCOME
+
+        ctx.outbound_queue.put(
+            agent_pb2.Event(
+                session_id=ctx.session_id,
+                outcome=agent_pb2.CallOutcome(outcome=outcome, promise_date=""),
+            )
+        )
+
     def _utterance_worker(self, ctx: SessionContext) -> None:
         while True:
             utterance_bytes = ctx.utterance_queue.get()
             if utterance_bytes is _UTTERANCE_STOP:
+                # _UTTERANCE_STOP travels through the same FIFO queue as real
+                # utterances, so reaching it guarantees every queued utterance
+                # has already been processed and is present in the history the
+                # classifier is about to read.
+                self._emit_outcome(ctx)
                 ctx.outbound_queue.put(_SHUTDOWN)
                 return
 
@@ -251,6 +342,21 @@ class VoiceAgentServicer(agent_pb2_grpc.VoiceAgentServicer):
                 f"[{ctx.session_id}] gRPC stream error in read pump: {e}", exc_info=True
             )
         finally:
+            # Speech still accumulating in the detector when the caller
+            # disconnects is deliberately discarded, not flushed into
+            # classification: a mid-word fragment transcribes poorly and
+            # would add STT latency to teardown. Logged rather than dropped
+            # silently, because it is the one path that can cost an outcome —
+            # a customer who agrees and hangs up inside VAD's silence
+            # threshold leaves that agreement here, unclassified.
+            pending = vad.get_utterance_frames()
+            if len(pending) > 0:
+                logger.info(
+                    f"[{ctx.session_id}] Discarding "
+                    f"{len(pending) / AudioPreprocessor.TARGET_SR:.2f}s of in-progress "
+                    f"speech captured at disconnect; excluded from classification."
+                )
+
             logger.info(
                 f"[{ctx.session_id}] Inbound stream closed. Signaling shutdown."
             )

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"time"
 	agentpb "voice-runtime/orchestrator-go/generated"
 	gatewaypb "voice-runtime/orchestrator-go/generated/gateway"
 	"voice-runtime/orchestrator-go/internal/config"
@@ -16,13 +17,23 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// fallbackOutcome is reported when a call ends without a classified
-// outcome. UNCLEAR is one of the four outcomes the Recovery Orchestrator
-// already understands and is the honest description of a call whose
-// transcript has not been classified yet, so it needs no rework once
-// post-call classification lands — that milestone only has to replace this
-// constant with the classifier's verdict.
+// fallbackOutcome is reported when a call ends without the inference engine
+// delivering a classification — timeout, engine failure, or a call with no
+// conversation at all. UNCLEAR is one of the four outcomes the Recovery
+// Orchestrator already understands, so this degrades cleanly rather than
+// inventing a verdict.
 const fallbackOutcome = "UNCLEAR"
+
+// outcomeTimeout bounds the wait for post-call classification after the
+// inference stream is half-closed. Budget, from measured latencies: an
+// in-flight utterance must drain first (~3.0s worst case observed), then
+// the classification inference itself (~1.5s with full conversation
+// history), plus transport. 5s covers that with headroom and stays within
+// the "call ends to audit_log updated" target in docs/demo.md.
+//
+// This is now the only bound on that wait: the inference context no longer
+// derives from the caller's stream, so gRPC will not cancel it for us.
+const outcomeTimeout = 5 * time.Second
 
 type Server struct {
 	gatewaypb.UnimplementedGatewayServer
@@ -114,7 +125,14 @@ func (s *Server) StreamAudio(stream gatewaypb.Gateway_StreamAudioServer) error {
 	log.Printf("[Gateway] Incoming session %s, source_sample_rate=%d", sessionID, sourceSampleRate)
 
 	agentClient := agentpb.NewVoiceAgentClient(s.conn)
-	agentCtx, cancelAgent := context.WithCancel(stream.Context())
+
+	// Deliberately rooted at Background, not stream.Context(). The inference
+	// stream must outlive the caller's connection: when the customer hangs
+	// up, gRPC cancels stream.Context(), and a derived context would cascade
+	// that cancellation into the engine before it can classify the call.
+	// cancelAgent below is what tears this down instead, and the deferred
+	// call guarantees it fires on every exit path.
+	agentCtx, cancelAgent := context.WithCancel(context.Background())
 	defer cancelAgent()
 
 	agentStream, err := agentClient.StreamEvents(agentCtx)
@@ -154,7 +172,19 @@ func (s *Server) StreamAudio(stream gatewaypb.Gateway_StreamAudioServer) error {
 	outboundDone := make(chan struct{})
 	go func() {
 		defer close(outboundDone)
+
+		// On send failure this keeps draining AgentAudioChan instead of
+		// returning. The caller is gone, so the audio has nowhere to go — but
+		// abandoning the channel would let its buffer fill and block the
+		// session's readPump, which still has to receive the classified
+		// outcome before teardown.
+		sendFailed := false
+
 		for chunk := range sess.AgentAudioChan {
+			if sendFailed {
+				continue
+			}
+
 			err := stream.Send(&gatewaypb.GatewayEvent{
 				SessionId: sessionID,
 				Payload: &gatewaypb.GatewayEvent_Audio{
@@ -165,8 +195,8 @@ func (s *Server) StreamAudio(stream gatewaypb.Gateway_StreamAudioServer) error {
 			})
 
 			if err != nil {
-				log.Printf("[Gateway] session %s: outbound send to AetherRTC failed: %v", sessionID, err)
-				return
+				log.Printf("[Gateway] session %s: outbound send to AetherRTC failed, discarding remaining audio: %v", sessionID, err)
+				sendFailed = true
 			}
 		}
 	}()
@@ -194,10 +224,18 @@ func (s *Server) StreamAudio(stream gatewaypb.Gateway_StreamAudioServer) error {
 		}
 	}()
 
+	// inboundRelayExited records whether the goroutine above — the only
+	// other caller of Send on the inference stream — has stopped. Every
+	// path that publishes to inboundErr does so after its final SendAudio
+	// has returned and immediately before the goroutine exits, so receiving
+	// from that channel proves no further send can be in flight.
+	inboundRelayExited := false
+
 	select {
 	case <-sess.DoneChan:
 		log.Printf("[Gateway] session %s: Python side ended.", sessionID)
 	case err := <-inboundErr:
+		inboundRelayExited = true
 		if err == io.EOF {
 			log.Printf("[Gateway] session %s: AetherRTC closed stream.", sessionID)
 		} else {
@@ -205,18 +243,65 @@ func (s *Server) StreamAudio(stream gatewaypb.Gateway_StreamAudioServer) error {
 		}
 	}
 
+	outcome, promiseDate := s.collectOutcome(sess, sessionID, inboundRelayExited)
+
 	cancelAgent()
 	<-outboundDone
 
 	if recoveryAssigned {
-		if err := s.RecoveryClient.EndSession(sessionID, fallbackOutcome, ""); err != nil {
+		if err := s.RecoveryClient.EndSession(sessionID, outcome, promiseDate); err != nil {
 			log.Printf("[Gateway] session %s: failed to report call outcome: %v", sessionID, err)
 		} else {
 			log.Printf("[Gateway] session %s: reported outcome '%s' to recovery orchestrator.",
-				sessionID, fallbackOutcome)
+				sessionID, outcome)
 		}
 	}
 
 	return nil
 
+}
+
+// collectOutcome half-closes the inference stream to signal that no further
+// audio is coming, then waits for the engine's post-call classification.
+// Falls back to fallbackOutcome rather than blocking teardown indefinitely.
+//
+// inboundRelayExited must be true before this half-closes: a gRPC stream
+// permits only one sender at a time, and CloseSend concurrent with the
+// relay's SendAudio is a data race that can corrupt the stream or panic.
+func (s *Server) collectOutcome(sess *session.Session, sessionID string, inboundRelayExited bool) (string, string) {
+	if outcome, promiseDate := sess.Outcome(); outcome != "" {
+		return outcome, promiseDate
+	}
+
+	// Reaching here with the relay still live means the engine ended first
+	// and never classified — so there is nothing a half-close could still
+	// elicit, and attempting one would only risk the race.
+	if !inboundRelayExited {
+		log.Printf("[Gateway] session %s: inference engine ended before classifying, falling back to '%s'.",
+			sessionID, fallbackOutcome)
+		return fallbackOutcome, ""
+	}
+
+	if err := sess.SignalInputComplete(); err != nil {
+		log.Printf("[Gateway] session %s: failed to half-close inference stream: %v", sessionID, err)
+		return fallbackOutcome, ""
+	}
+
+	select {
+	case <-sess.OutcomeChan:
+	case <-sess.DoneChan:
+		// Engine closed its side without classifying — handled below.
+	case <-time.After(outcomeTimeout):
+		log.Printf("[Gateway] session %s: timed out after %s waiting for outcome classification.",
+			sessionID, outcomeTimeout)
+	}
+
+	outcome, promiseDate := sess.Outcome()
+	if outcome == "" {
+		log.Printf("[Gateway] session %s: no outcome classified, falling back to '%s'.",
+			sessionID, fallbackOutcome)
+		return fallbackOutcome, ""
+	}
+
+	return outcome, promiseDate
 }
