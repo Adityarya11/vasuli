@@ -17,6 +17,7 @@ func main() {
 	profileName := flag.String("profile", "receptionist", "Agent profile YAML name")
 	port := flag.String("port", ":50052", "Gateway server listen address")
 	inferenceAddr := flag.String("inference", "localhost:50051", "Inference engine address")
+	recoveryURL := flag.String("recovery", "", "Recovery Orchestrator base URL (empty disables per-session context lookup)")
 	flag.Parse()
 
 	profile, err := config.LoadProfile(*profileName)
@@ -29,14 +30,19 @@ func main() {
 		log.Fatalf("Failed to listen on %s: %v", *port, err)
 	}
 
-	gwServer, err := gateway.NewServer(profile, *inferenceAddr)
+	gwServer, err := gateway.NewServer(profile, *inferenceAddr, *recoveryURL)
 	if err != nil {
 		log.Fatalf("Failed to initialize gateway server: %v", err)
 	}
 	grpcServer := grpc.NewServer()
 	gatewaypb.RegisterGatewayServer(grpcServer, gwServer)
 
-	log.Printf("Gateway server listening on %s (profile: %s, inference: %s)", *port, profile.Name, *inferenceAddr)
+	recoveryMode := "disabled"
+	if *recoveryURL != "" {
+		recoveryMode = *recoveryURL
+	}
+	log.Printf("Gateway server listening on %s (profile: %s, inference: %s, recovery: %s)",
+		*port, profile.Name, *inferenceAddr, recoveryMode)
 	if err := grpcServer.Serve(lis); err != nil {
 		log.Fatalf("Gateway server failed: %v", err)
 	}
