@@ -108,6 +108,41 @@ curl localhost:8090/api/v1/campaigns/<id>/metrics
 
 **Definition of done:** Open a browser tab. AetherRTC generates a session_id. var-thon calls Recovery Orchestrator. The voice agent speaks using Rahul Sharma's context (not the receptionist). The audit_log in `vasuli.db` shows `session_assigned` with the correct call_session_id.
 
+**Verification log (26 Aug 2026, session `session_8444`):**
+
+```
+[Gateway] Recovery context assigned for session session_8444 (customer=Rahul Sharma, outstanding=420000 paise)
+[InferenceEngine] [session_8444] Profile received — agent: 'Sarah the Receptionist'
+[InferenceEngine.LLM] Sentence chunk ready: 'Hello Sir/Mr.'
+[InferenceEngine.LLM] Sentence chunk ready: 'Sharma, this is Priya from Razorpay Merchant Services here to contact you regarding a payment issue.'
+[InferenceEngine.LLM] Sentence chunk ready: 'May I please confirm that we are speaking with Rahul Sharma?'
+...
+[InferenceEngine.LLM] Sentence chunk ready: 'We have an outstanding payment of ₹4,200 for a Bajaj Finance Personal Loan which was due on August 15, 2026...'
+[Gateway] session session_8444: reported outcome 'UNCLEAR' to recovery orchestrator.
+```
+
+```sql
+-- vasuli.db, session_8444
+session_created     {"customer_name":"Rahul Sharma"}
+session_assigned    {"call_session_id":"session_8444"}
+call_ended          {"outcome":"UNCLEAR"}
+outcome_classified  {"outcome":"UNCLEAR"}
+```
+
+Note the agent identity in Python's log line still reads `Sarah the Receptionist` — expected, not a bug. `Profile.Name` is deliberately left untouched by `resolveProfile` (see `docs/build-log.md`, 2026-08-24) and only exists for log/telemetry purposes. What the LLM actually says is driven entirely by `SystemPrompt`, which is where "You are Priya..." lives — confirmed here by the transcript itself.
+
+**Measured performance (recovery profile, 3-utterance call, warm model):**
+
+| Utterance | STT latency | LLM TTFT |
+| --------- | ----------- | -------- |
+| 1         | 0.723s      | 0.651s   |
+| 2         | 0.636s      | 0.405s   |
+| 3         | 0.644s      | 0.463s   |
+
+Average TTFT (~0.51s) and STT (~0.67s) both run slightly above the receptionist-profile baseline in `var-thon/README.md` (~0.42s TTFT, ~0.98s STT) — expected, not a regression: the recovery system prompt carries substantially more context than the two-sentence receptionist prompt, so there's more for the model to process before the first token.
+
+**Status: Complete.**
+
 ---
 
 ## M4 — Recovery Agent Profile
