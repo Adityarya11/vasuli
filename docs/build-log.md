@@ -157,3 +157,93 @@ the next one. Either reset the database between distinct test phases, or
 design fixtures with enough headroom (more than one account) that an
 earlier phase can't starve a later one without anyone noticing until the
 symptom looks identical to a real failure.
+
+---
+
+## 2026-08-26 — M5: outcome classification, and three cycles chasing a
+## bug that did not exist
+
+### Two context bugs caught before they ran
+
+M5 needed the inference engine to classify a call's outcome *after* the
+caller hangs up, then send it back. Tracing the teardown path first
+turned up two things that would have made that impossible:
+
+1. `agentCtx` derived from `stream.Context()`. gRPC cancels that context
+   the instant the browser disconnects, and cancellation cascades to
+   children — so the engine would be killed before it could classify,
+   no matter what the surrounding code did. Fixed by rooting at
+   `context.Background()`.
+2. `CloseSend()` would race the inbound relay's `SendAudio()`. A gRPC
+   stream permits exactly one sender; concurrent sends corrupt it or
+   panic. Only reachable on the engine-ends-first path, so testing would
+   likely never have caught it. Fixed by gating the half-close on proof
+   the relay has exited.
+
+Both are the same shape as the `EndSession` context bug from M3: **the
+default instinct "derive from the parent context" is correct for
+propagating cancellation, and wrong whenever a child must deliberately
+outlive its parent.** Three instances in this codebase now. Worth
+treating as a checklist item rather than rediscovering each time.
+
+### "VAD stopped detecting" — three debugging cycles, no bug
+
+**What broke:** After the first exchange, the agent stopped hearing
+anything. Then, after a change, exactly two exchanges. It looked
+identical to a freeze bug hit previously during AetherRTC integration,
+where a blocking channel send deadlocked the capture goroutine.
+
+**What it actually was:** nothing. AetherRTC gates the caller's
+microphone while the agent speaks (`AgentSpeaking`, an echo-suppression
+measure) using a bare `continue` — dropping packets *before* the channel
+send, leaving no trace in any log, in any service. Meanwhile Python
+logged `Utterance response complete` when *synthesis* finished, which is
+several seconds before *playback* finishes. On one run that gap was 22
+seconds. Every "VAD is broken" report was speech into a gate that was
+correctly closed, with no instrument anywhere showing it.
+
+**How it was settled:** arithmetic, not intuition. Piper emits 22050Hz
+16-bit mono, so `(wav_bytes - 44) / 2 / 22050` gives real playback
+seconds. Applied to the successful M3 run, every utterance landed
+1–2 seconds *after* its predecessor's playback would have ended. Applied
+to the failing runs, the "missing" utterances landed inside the window.
+The final verification run confirmed it six for six.
+
+**Fix:** the log line now reports playback duration, not just
+completion — `4.79s of audio queued; caller audio is gated at the edge
+until playback ends`. The gate itself is unchanged and correct.
+
+**Lessons, two of them:**
+
+- *A log line that reports the wrong milestone is worse than no log
+  line.* `Utterance response complete` was true (synthesis had
+  completed) and actively misleading (the turn had not). It cost three
+  cycles and nearly cost an unnecessary change to a frozen repo.
+- *Reaching for a remembered bug is a trap.* A previous freeze in this
+  exact subsystem made "the capture goroutine is deadlocked again" the
+  obvious explanation, and the first instinct was to re-apply that fix.
+  What settled it was checking the actual file (the old bug was not
+  present, the repo was clean) and then computing what the timings
+  *should* be. Symptoms that resemble a past bug deserve more
+  verification than novel ones, not less.
+
+### What M5 landed
+
+Half-close teardown (`CloseSend` instead of cancellation), which also
+closed the limitation tracked in `var-thon/docs/backlog.md` — *"`_read_pump`
+does not currently support half-close"* — and silenced the `grpc.RpcError`
+traceback that had been logged on every normal call teardown since M3.
+
+Verified live, `session_66867`: six exchanges, `AGREED` classified in
+0.858s, payment link created, complete audit trail. See `docs/roadmap.md`
+M5 for the verification log.
+
+### Deferred with eyes open
+
+Speech still accumulating in the VAD detector when a caller disconnects
+is discarded rather than flushed into classification. The failure mode
+this accepts, stated plainly: a customer who agrees and hangs up within
+VAD's 800ms silence threshold leaves that agreement unclassified, and the
+call resolves `UNCLEAR` instead of `AGREED`. Flushing costs ~0.7s of STT
+at teardown and is a small change if rehearsal shows it matters. Logged
+explicitly when it happens, so the evidence exists either way.

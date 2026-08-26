@@ -206,7 +206,7 @@ without a specific customer's name or amount.
 
 ---
 
-## M5 — Post-Call Outcome Classification
+## M5 — Post-Call Outcome Classification ✅ DONE
 
 **What:** After the last utterance completes in Inference-Python, run a single blocking LLM call to classify the call outcome. Pass the result to var-thon Orchestrator-Go, which includes it in the `EndSession` HTTP call.
 
@@ -228,6 +228,63 @@ Outcome needs to reach var-thon Orchestrator-Go. Two options:
 Use Option B. It keeps Inference-Python's only external dependency as gRPC (no HTTP client to add). The Transcript event already exists in `agent.proto`. Use it with `is_final=true` and a JSON payload in `text`.
 
 **Definition of done:** Run a call where you say "yes, please send me the payment link." After the call, `SELECT status FROM recovery_sessions WHERE call_session_id = '...'` returns `recovered` (or `active` pending Razorpay confirmation). The `audit_log` has `outcome_classified` with `{"outcome":"AGREED"}`.
+
+### What was actually built (deviates from the plan above)
+
+Option B was taken, but **not** by overloading `Transcript` with JSON. A
+purpose-built `CallOutcome` message was added to the `Event` oneof
+instead — `protoc` and both plugin versions already matched what
+generated the existing bindings, so regeneration was cheap and the
+generated diff stayed confined to the new message. An outcome is not a
+transcript; the typed field also gives `promise_date` a home for free.
+
+The plan also underestimated the work. Delivering an outcome *after* the
+caller hangs up required reworking teardown, because the engine was being
+killed at the moment it needed to think:
+
+- The inference stream's context now roots at `context.Background()`.
+  Derived from `stream.Context()`, gRPC cancelled it on browser
+  disconnect and that cascaded into the engine.
+- Disconnect now triggers `CloseSend()` (half-close) rather than
+  cancellation, gated on the inbound relay having exited (a gRPC stream
+  permits one sender). This closes the half-close limitation tracked in
+  `var-thon/docs/backlog.md` and removes the `grpc.RpcError` traceback
+  that had been logged on every normal teardown since M3.
+- 5s timeout on collection, budgeted from measured latencies (~3.0s
+  worst-case in-flight utterance + ~1.5s classification), falling back to
+  `UNCLEAR`.
+
+**Verification log (26 Aug 2026, session `session_66867`, six exchanges):**
+
+```
+[InferenceEngine] [session_66867] STT: 'please give me the payment link'
+[InferenceEngine] [session_66867] Inbound stream closed. Signaling shutdown.
+[InferenceEngine] [session_66867] Outcome classified as AGREED in 0.858s.
+[Session session_66867] Call outcome classified: AGREED
+[Gateway] session session_66867: reported outcome 'AGREED' to recovery orchestrator.
+```
+
+```sql
+-- vasuli.db
+call_ended          {"outcome":"AGREED"}
+outcome_classified  {"outcome":"AGREED"}
+payment_link_sent   {"amount_paise":420000,"razorpay_link_id":"plink_stub_a7cd...","short_url":"..."}
+
+-- recovery_sessions
+Rahul Sharma | link_sent | plink_stub_a7cd414f83bb952d | 1
+```
+
+Note the status is `link_sent`, not `recovered`, contradicting the
+definition of done written above — that was drafted before the status
+lifecycle existed. `recovered` is reserved for a confirmed
+`payment.captured` webhook (M6). `link_sent` is the correct terminal
+state for a call that ended in agreement but has no payment confirmation
+yet; claiming `recovered` at this point would overstate what happened.
+
+Full classification latency was 0.858s, and end-to-end teardown
+(disconnect → outcome persisted) completed in ~1s against the 5s budget.
+
+**Status: Complete.**
 
 ---
 
