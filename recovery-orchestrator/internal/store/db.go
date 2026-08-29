@@ -187,6 +187,49 @@ func (db *DB) GetSessionByRazorpayPaymentID(paymentID string) (*RecoverySession,
 	return db.scanSession(db.conn.QueryRow(sessionSelectCols+` WHERE razorpay_payment_id = ?`, paymentID))
 }
 
+// GetSessionByRazorpayLinkID resolves the session that a payment_link.paid
+// webhook refers to. This is a distinct lookup from the payment-id one on
+// purpose: a payment made against a link we generated carries a brand new
+// payment id, unrelated to the failed payment that originally triggered
+// recovery, so razorpay_payment_id can never match it.
+func (db *DB) GetSessionByRazorpayLinkID(linkID string) (*RecoverySession, error) {
+	return db.scanSession(db.conn.QueryRow(sessionSelectCols+` WHERE razorpay_link_id = ?`, linkID))
+}
+
+// GetMostRecentActiveCampaign returns the newest campaign still accepting
+// work, or nil when none is active. Inbound payment.failed webhooks attach
+// to it; with no active campaign they are acknowledged and dropped rather
+// than inventing a campaign to own them.
+func (db *DB) GetMostRecentActiveCampaign() (*Campaign, error) {
+	var c Campaign
+	err := db.conn.QueryRow(
+		`SELECT id, name, total, status, created_at
+		   FROM campaigns
+		  WHERE status = 'active'
+		  ORDER BY created_at DESC
+		  LIMIT 1`,
+	).Scan(&c.ID, &c.Name, &c.Total, &c.Status, &c.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("store: get active campaign: %w", err)
+	}
+	return &c, nil
+}
+
+// IncrementCampaignTotal keeps campaigns.total consistent when a session is
+// added after campaign creation, so metrics denominators stay correct.
+func (db *DB) IncrementCampaignTotal(campaignID string) error {
+	_, err := db.conn.Exec(
+		`UPDATE campaigns SET total = total + 1 WHERE id = ?`, campaignID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: increment campaign total: %w", err)
+	}
+	return nil
+}
+
 const sessionSelectCols = `
 	SELECT id, campaign_id, call_session_id, customer_name, outstanding_paise,
 	       product_name, due_date, razorpay_payment_id, system_prompt, status,

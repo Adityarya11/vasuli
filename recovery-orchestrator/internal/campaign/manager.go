@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -16,6 +17,11 @@ import (
 	"vasuli/recovery-orchestrator/internal/razorpay"
 	"vasuli/recovery-orchestrator/internal/store"
 )
+
+// ErrNoActiveCampaign reports an inbound payment.failed with no campaign to
+// attach it to. Acknowledged and dropped rather than rejected — see
+// HandlePaymentFailed.
+var ErrNoActiveCampaign = errors.New("campaign: no active campaign to attach this payment to")
 
 const systemPromptTemplate = `You are Priya, a professional payment recovery specialist calling on behalf
 of a Razorpay merchant.
@@ -226,27 +232,145 @@ func (m *Manager) handleUnclear(sess *store.RecoverySession) error {
 	return m.db.MarkUnclear(sess.ID)
 }
 
-// HandlePaymentCaptured is invoked by the Razorpay webhook consumer (M6)
-// when a payment.captured event confirms a recovery. Idempotent: a second
-// capture event for an already-recovered session is a no-op.
-func (m *Manager) HandlePaymentCaptured(razorpayPaymentID string) error {
+// ErrSessionNotFound reports a webhook that refers to a session this system
+// has no record of. Webhook delivery is not scoped to one merchant
+// integration, so unrelated events are an ordinary occurrence, not a
+// failure — callers acknowledge them rather than returning an error status
+// that would make Razorpay retry forever.
+var ErrSessionNotFound = errors.New("campaign: no recovery session matches this event")
+
+// HandlePaymentCaptured confirms recovery from a payment.captured event,
+// matching on the original failed payment's id.
+//
+// Note this only resolves payments against that original id — the demo's
+// simulated capture. A customer paying a link Vasuli generated produces a
+// different payment id entirely; that path is HandlePaymentLinkPaid.
+// Idempotent: a repeat capture for an already-recovered session is a no-op.
+// The bool reports whether this call actually changed the session's state,
+// so callers can distinguish a real recovery from a redelivered duplicate
+// instead of logging both identically.
+func (m *Manager) HandlePaymentCaptured(razorpayPaymentID string) (bool, error) {
 	sess, err := m.db.GetSessionByRazorpayPaymentID(razorpayPaymentID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if sess == nil {
-		return fmt.Errorf("campaign: no session found for razorpay_payment_id %q", razorpayPaymentID)
+		return false, ErrSessionNotFound
 	}
+
+	return m.markRecovered(sess, map[string]any{
+		"razorpay_payment_id": razorpayPaymentID,
+	})
+}
+
+// HandlePaymentLinkPaid confirms recovery from a payment_link.paid event,
+// matching on the generated link's id. This is the path a real customer
+// payment takes.
+func (m *Manager) HandlePaymentLinkPaid(razorpayLinkID, razorpayPaymentID string) (bool, error) {
+	sess, err := m.db.GetSessionByRazorpayLinkID(razorpayLinkID)
+	if err != nil {
+		return false, err
+	}
+	if sess == nil {
+		return false, ErrSessionNotFound
+	}
+
+	return m.markRecovered(sess, map[string]any{
+		"razorpay_link_id":    razorpayLinkID,
+		"razorpay_payment_id": razorpayPaymentID,
+	})
+}
+
+// markRecovered reports false when the session was already recovered, so a
+// redelivered webhook neither writes a second audit row nor reads as a
+// second recovery in the logs.
+func (m *Manager) markRecovered(sess *store.RecoverySession, auditData map[string]any) (bool, error) {
 	if sess.Status == "recovered" {
-		return nil
+		return false, nil
 	}
 
 	if err := m.db.MarkRecovered(sess.ID); err != nil {
-		return err
+		return false, err
 	}
-	return m.db.InsertAuditLog(sess.ID, "payment_captured", map[string]any{
-		"razorpay_payment_id": razorpayPaymentID,
-	})
+	if err := m.db.InsertAuditLog(sess.ID, "payment_captured", auditData); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// HandlePaymentFailed creates a recovery session from an inbound
+// payment.failed event, attaching it to the most recent active campaign.
+//
+// Returns ErrNoActiveCampaign when nothing is active. Auto-creating a
+// campaign to hold orphaned sessions was rejected deliberately: it makes
+// campaign ownership ambiguous, and that ambiguity surfaces later as
+// metrics that do not reconcile against any batch an operator loaded.
+// The bool reports whether a new session was created, distinguishing a
+// first delivery from a redelivery of the same event.
+func (m *Manager) HandlePaymentFailed(payment razorpay.PaymentEntity) (*store.RecoverySession, bool, error) {
+	campaignRow, err := m.db.GetMostRecentActiveCampaign()
+	if err != nil {
+		return nil, false, err
+	}
+	if campaignRow == nil {
+		return nil, false, ErrNoActiveCampaign
+	}
+
+	// Webhook delivery is at-least-once. Without this check a redelivered
+	// payment.failed would queue the same customer for a second call.
+	if payment.ID != "" {
+		existing, err := m.db.GetSessionByRazorpayPaymentID(payment.ID)
+		if err != nil {
+			return nil, false, err
+		}
+		if existing != nil {
+			return existing, false, nil
+		}
+	}
+
+	acc := store.Account{
+		CustomerName:      payment.CustomerName(),
+		OutstandingPaise:  payment.Amount,
+		ProductName:       payment.Description,
+		DueDate:           payment.DueDate(),
+		RazorpayPaymentID: payment.ID,
+	}
+	if acc.ProductName == "" {
+		acc.ProductName = "outstanding payment"
+	}
+
+	sessionID, err := randomID("rec_")
+	if err != nil {
+		return nil, false, err
+	}
+
+	prompt, err := m.renderSystemPrompt(acc)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if err := m.db.InsertRecoverySession(sessionID, campaignRow.ID, prompt, acc); err != nil {
+		return nil, false, err
+	}
+	if err := m.db.IncrementCampaignTotal(campaignRow.ID); err != nil {
+		return nil, false, err
+	}
+	if err := m.db.InsertAuditLog(sessionID, "webhook_received", map[string]any{
+		"razorpay_payment_id": payment.ID,
+		"customer_name":       acc.CustomerName,
+		"amount_paise":        acc.OutstandingPaise,
+	}); err != nil {
+		return nil, false, err
+	}
+	if err := m.db.InsertAuditLog(sessionID, "session_created", map[string]any{
+		"customer_name": acc.CustomerName,
+		"source":        "payment.failed webhook",
+	}); err != nil {
+		return nil, false, err
+	}
+
+	created, err := m.db.GetSessionByID(sessionID)
+	return created, true, err
 }
 
 func (m *Manager) Metrics(campaignID string) (*store.Metrics, error) {

@@ -12,10 +12,16 @@ import (
 type Handlers struct {
 	manager *campaign.Manager
 	db      *store.DB
+
+	// webhookSecret is the shared secret inbound Razorpay webhooks are
+	// signed with. Empty means no secret was configured, in which case
+	// every webhook fails verification and is rejected — failing closed,
+	// so a misconfigured deployment cannot be driven by unsigned requests.
+	webhookSecret string
 }
 
-func NewHandlers(manager *campaign.Manager, db *store.DB) *Handlers {
-	return &Handlers{manager: manager, db: db}
+func NewHandlers(manager *campaign.Manager, db *store.DB, webhookSecret string) *Handlers {
+	return &Handlers{manager: manager, db: db, webhookSecret: webhookSecret}
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

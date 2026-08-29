@@ -74,14 +74,27 @@ interface:
 go run ./cmd -port :8090 -db ./vasuli.db
 ```
 
-| Flag  | Default        | Meaning                                    |
-| ----- | -------------- | ------------------------------------------- |
-| `-port` | `:8090`      | HTTP listen address                        |
-| `-db`   | `./vasuli.db` | SQLite database path (created if absent)   |
+| Flag | Default | Meaning |
+| ---- | ------- | ------- |
+| `-port` | `:8090` | HTTP listen address |
+| `-db` | `./vasuli.db` | SQLite database path (created if absent) |
+| `-razorpay-key-id` | *(empty)* | Test-mode key ID. Empty uses the stub client |
+| `-razorpay-key-secret` | *(empty)* | Test-mode key secret |
+| `-razorpay-webhook-secret` | *(empty)* | Shared secret inbound webhooks are signed with |
 
 On startup, the service applies its schema (idempotent — safe to run
-against an existing database) and starts listening. No external services
-are required to run it standalone; Razorpay calls are stubbed until M6.
+against an existing database) and starts listening.
+
+With no Razorpay credentials it runs fully standalone against
+`StubClient`, which fabricates payment links without any network call —
+every endpoint including the webhook consumer works in that mode. Supply
+both key flags to switch to the real test-mode API. **Startup refuses any
+key without an `rzp_test_` prefix**: Vasuli generates payment demands
+autonomously from an AI conversation, and the distance between test and
+live mode is a single flag.
+
+Without `-razorpay-webhook-secret`, webhook verification fails closed and
+every inbound webhook is rejected.
 
 ---
 
@@ -206,6 +219,49 @@ Aggregate counts and amounts for a campaign, computed live from
 }
 ```
 
+### `POST /webhooks/razorpay`
+
+Consumes Razorpay webhooks. The raw request body is verified against
+`X-Razorpay-Signature` (HMAC-SHA256) **before** parsing — decoding and
+re-encoding the JSON changes the bytes and therefore the signature.
+
+| Event | Matched on | Action |
+| ----- | ---------- | ------ |
+| `payment.failed` | — | Creates a session on the most recent active campaign |
+| `payment.captured` | `razorpay_payment_id` | Marks the original failed payment recovered |
+| `payment_link.paid` | `razorpay_link_id` | Marks a Vasuli-generated link recovered |
+| anything else | — | Acknowledged, no action |
+
+`payment.captured` and `payment_link.paid` are **not** interchangeable. A
+customer paying a link Vasuli generated produces a *new* payment id with
+no relationship to the failed payment that started recovery, so only the
+link id can resolve it.
+
+**Responses** are chosen for how Razorpay reacts to them — any non-2xx
+triggers retries with backoff:
+
+- `400` — signature verification failed, or malformed payload. Retrying
+  cannot help.
+- `200` — processed, or acknowledged-and-ignored (unknown session, no
+  active campaign, unactionable event type). Prevents infinite redelivery.
+
+All handlers are idempotent; redelivery is the normal case, not an edge
+case.
+
+**Testing without a Razorpay account:** the webhook secret is a string you
+choose and pass to both the server and your `curl`. No dashboard webhook
+registration is needed.
+
+```bash
+BODY='{"event":"payment.captured","payload":{"payment":{"entity":{"id":"pay_test_001"}}}}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "your_webhook_secret" | awk '{print $2}')
+
+curl -X POST http://localhost:8090/webhooks/razorpay \
+  -H "Content-Type: application/json" \
+  -H "X-Razorpay-Signature: $SIG" \
+  -d "$BODY"
+```
+
 ### `GET /health`
 
 ```json
@@ -266,12 +322,17 @@ abstraction — there are exactly two known implementations (`StubClient` now,
 a `LiveClient` once M6 has test-mode credentials), and `campaign.Manager`
 needs to compile and be fully exercisable today without real credentials.
 
-**No webhook consumer yet.** `POST /webhooks/razorpay` (inbound
-`payment.failed` / `payment.captured` handling with HMAC verification)
-is deliberately not built. Building it now would mean either a placeholder
-implementation or code that can't be tested against real signatures — both
-worse than waiting until M6, when real credentials make it buildable
-properly the first time.
+**Webhooks are simulated, not tunnelled.** Razorpay cannot reach
+`localhost`, so demonstrating inbound events needs either a public tunnel
+or locally-signed requests. The verification code is identical in both
+cases, and a tunnel adds an external dependency that can fail during a
+live demo — so the demo signs its own requests with a shared secret.
+
+**`payment.failed` with no active campaign is dropped, not stored.** It's
+acknowledged with 200 (so Razorpay stops retrying) and logged. The
+alternative — auto-creating a campaign to own the session — makes campaign
+ownership ambiguous, and that ambiguity resurfaces later as metrics that
+reconcile against no batch anyone loaded.
 
 **Standard library router, no framework.** Five endpoints don't justify a
 routing dependency; Go 1.22+'s `http.ServeMux` method+path patterns
@@ -298,11 +359,17 @@ vertical slices rather than strictly sequentially.
       resolution in `gateway/server.go`) — verified with a real browser call
       through the full voice pipeline; see `../docs/roadmap.md` M3
 
+- [x] Razorpay webhook consumer (`POST /webhooks/razorpay`) — HMAC-SHA256
+      verification, idempotent handling of `payment.failed`,
+      `payment.captured`, and `payment_link.paid`
+- [x] `razorpay.LiveClient` — real payment-link creation, selected over the
+      stub when credentials are supplied; startup refuses non-test keys
+- [x] Go unit tests for signature verification, payload parsing, and the
+      live client's request shape
+
 **Not yet built:**
 
 - [ ] Outcome signal from Inference-Python back to Orchestrator-Go
-- [ ] Razorpay webhook consumer (`POST /webhooks/razorpay`, HMAC verification)
-- [ ] `razorpay.LiveClient` — real API calls, once test-mode keys exist
 - [ ] Synthetic 20-account batch and a full rehearsal run
 - [ ] Cooldown-based re-queueing (currently `UNCLEAR` either retries once
       the attempt budget allows or fails permanently — no time-based
