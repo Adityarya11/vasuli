@@ -326,6 +326,69 @@ Store `response.id` as `razorpay_link_id` in `recovery_sessions`. Log `payment_l
 2. Complete a call that classifies as AGREED → a real Razorpay test-mode payment link ID appears in `recovery_sessions.razorpay_link_id`.
 3. Run `curl -X POST localhost:8090/webhooks/razorpay` with a simulated `payment.captured` event → `recovery_sessions.status` updates to `recovered`.
 
+### Built, with one correction to the plan above
+
+Item 3 as written would never have worked. `payment.captured` for a
+payment made against a generated link carries a **new** payment id, not
+the original failed one stored in `razorpay_payment_id`, so that lookup
+matches nothing (see `docs/build-log.md`, 28 Aug). Vasuli consumes both
+events, matched on different columns:
+
+| Event | Matched on | Meaning |
+| ----- | ---------- | ------- |
+| `payment.captured` | `razorpay_payment_id` | the original failed payment was settled |
+| `payment_link.paid` | `razorpay_link_id` | a customer paid a link Vasuli generated |
+| `payment.failed` | — | creates a session on the active campaign |
+
+Decisions taken:
+
+- **Simulated webhooks, not a tunnel.** Verification code is identical
+  either way; a tunnel adds a live external dependency that can fail
+  mid-demo. The webhook secret is a shared string between the server and
+  the test `curl`, so no dashboard webhook registration is required.
+- **`payment.failed` with no active campaign is acknowledged and
+  dropped** (HTTP 200, logged). Auto-creating a campaign to own orphaned
+  sessions would make campaign ownership ambiguous and produce metrics
+  that reconcile against no batch an operator loaded.
+- **Startup refuses a non-`rzp_test_` key.** Payment demands are
+  generated autonomously from an AI conversation; the gap between test
+  and live is one CLI flag.
+- **All handlers are idempotent.** Webhook delivery is at-least-once, so
+  redelivery is the normal path — duplicates change no state and log as
+  duplicates.
+
+**Verification (28 Aug), no Razorpay credentials required:**
+
+```
+== signature verification ==
+  PASS  valid signature accepted (HTTP 200)
+  PASS  wrong secret rejected (HTTP 400)
+  PASS  missing signature rejected (HTTP 400)
+  PASS  tampered body rejected (HTTP 400)
+== event routing ==
+  PASS  unknown event acknowledged (HTTP 200)
+  PASS  payment.captured unknown id acknowledged (HTTP 200)
+  PASS  payment_link.paid unknown link acknowledged (HTTP 200)
+```
+
+Full loop, with a payment id absent from the database entirely:
+
+```
+payment_link.paid { payment_link.entity.id: plink_stub_b0d8..., payment.entity.id: pay_BRANDNEW999 }
+  -> Rahul Sharma | recovered | recovered_at set
+```
+
+Plus Go unit tests (`go test ./...`) covering signature verification
+including the re-encoded-body case, payload parsing for both event
+shapes, the live client's request shape and error surfacing, and
+test-mode key enforcement.
+
+**Remaining before this is fully done:** real test-mode credentials, to
+confirm `LiveClient` against the actual API. The request shape is
+asserted against a local stand-in; only the credentials are outstanding.
+
+**Status: Complete pending live-credential confirmation.**
+
 ---
 
 ## M7 — Metrics and Synthetic Batch

@@ -1,162 +1,183 @@
-# Vasuli — Demo Guide
+# Vasuli — Demo Runbook
 
-This guide walks through the complete demo sequence. Run it twice in rehearsal before the submission date.
+The complete cycle, top to bottom: voice call → outcome classification →
+payment link → webhook → recovered, with the audit trail proving each step.
+
+Every command here has been run against the real system. Where a step has a
+non-obvious failure mode, it is called out inline rather than left to be
+rediscovered.
 
 ---
 
-## Prerequisites
+## Before you start
 
-All services running. Start in this order and wait for each to be ready before starting the next.
+**Warm the LLM.** A cold Ollama load costs 5–10s on the first response,
+which reads as a broken system to anyone watching:
 
-```bash
-# Terminal 1 — Inference-Python
-cd vasuli/var-thon/services/inference-py
+```powershell
+curl.exe -s -X POST http://localhost:11434/api/generate -d '{\"model\":\"qwen2.5:3b\",\"prompt\":\"hi\",\"stream\":false}' > $null
+```
+
+**Start from a clean database** unless you deliberately want prior state:
+
+```powershell
+cd E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator
+Remove-Item vasuli.db -ErrorAction SilentlyContinue
+```
+
+---
+
+## Terminal 1 — Recovery Orchestrator
+
+```powershell
+cd E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator
+go run ./cmd -port :8090 -db ./vasuli.db -razorpay-webhook-secret whsec_vasuli_demo
+```
+
+Wait for: `Recovery Orchestrator listening on :8090 (db: ./vasuli.db, razorpay: stub (no credentials supplied))`
+
+`whsec_vasuli_demo` is a secret you choose. It is shared between this
+server and the `curl` commands below — Razorpay never sees it and no
+webhook registration is required. Without this flag, webhook verification
+fails closed and every webhook is rejected.
+
+To run against the real Razorpay test API instead, add
+`-razorpay-key-id rzp_test_... -razorpay-key-secret ...`. Startup refuses
+any key without an `rzp_test_` prefix.
+
+## Terminal 2 — Inference engine
+
+```powershell
+cd E:\APPLICATIONS\CODING\project\vasuli\var-thon\services\inference-py
 uv run python main.py
-# Wait for: "Inference Engine running on port :50051"
+```
 
-# Terminal 2 — var-thon Orchestrator-Go
-cd vasuli/var-thon/services/orchestrator-go
-go run ./cmd/gateway-server \
-  -profile recovery_agent \
-  -port :50052 \
-  -inference localhost:50051 \
-  -recovery http://localhost:8090
-# Wait for: "Gateway server listening on :50052"
+Wait for: `Inference Engine running on port :50051`
 
-# Terminal 3 — Recovery Orchestrator
-cd vasuli/recovery-orchestrator
-go run ./cmd/main.go \
-  -port :8090 \
-  -db ./vasuli.db \
-  -razorpay-key-id rzp_test_XXXX \
-  -razorpay-key-secret YYYY \
-  -razorpay-webhook-secret ZZZZ
-# Wait for: "Recovery Orchestrator listening on :8090"
+## Terminal 3 — Orchestrator-Go gateway
 
-# Terminal 4 — AetherRTC
-cd aetherRTC
+```powershell
+cd E:\APPLICATIONS\CODING\project\vasuli\var-thon\services\orchestrator-go
+go run ./cmd/gateway-server -profile recovery_agent -port :50052 -inference localhost:50051 -recovery http://localhost:8090
+```
+
+Wait for: `Gateway server listening on :50052 (profile: Priya, ... recovery: http://localhost:8090)`
+
+Confirm it says **`profile: Priya`**. If it says `Sarah the Receptionist`,
+the wrong profile is loaded and the fallback persona will be a dental
+receptionist.
+
+## Terminal 4 — AetherRTC
+
+```powershell
+cd E:\APPLICATIONS\CODING\project\AetherRTC
 go run ./cmd/gateway/main.go
-# Wait for: "Listening on ws://localhost:8080/ws"
 ```
 
-**Warm the LLM before the demo** (eliminates cold-start latency):
-
-```bash
-curl -s -X POST http://localhost:11434/api/generate \
-  -d '{"model":"qwen2.5:3b","prompt":"hi","stream":false}' > /dev/null
-```
+Wait for: `Listening on ws://localhost:8080/ws`
 
 ---
 
-## Step 1: Load the Recovery Campaign
+## Step 1 — Load the campaign
 
-```bash
-curl -s -X POST http://localhost:8090/api/v1/campaigns \
-  -H "Content-Type: application/json" \
-  -d @recovery-orchestrator/testdata/sample_campaign.json | python3 -m json.tool
+```powershell
+cd E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator
+curl.exe -s -X POST http://localhost:8090/api/v1/campaigns -H "Content-Type: application/json" -d "@testdata/m3_smoke_test.json"
 ```
-
-Expected output:
 
 ```json
-{
-  "campaign_id": "aug-emi-2026",
-  "name": "August Failed EMI Recovery",
-  "total": 20,
-  "status": "active",
-  "created_at": "2026-09-01T10:00:00Z"
-}
+{"campaign_id":"camp_...","name":"M3 Smoke Test","total":1,"status":"active",...}
 ```
 
-**What to say to judges:** "We have 20 failed payment accounts queued. Each has a customer name, outstanding amount, product, and due date. The system prompt for each call is pre-rendered with that customer's details — Priya knows exactly who she's calling and why."
+Note the `campaign_id` — Step 5 needs it.
 
----
+**The fixture holds one account.** Any earlier assign, including a probe
+with `gateway-test-client`, consumes it and leaves the queue empty — at
+which point the agent falls back to the static profile and never mentions
+the customer. If a call comes through generically, re-run this command.
 
-## Step 2: Show the Queue
+## Step 2 — The live call
+
+Open `E:\APPLICATIONS\CODING\project\AetherRTC\index.html`, click
+**Start Call**, allow the microphone, wait for
+`Received remote audio track`.
+
+**The single most important rule: wait for Priya to finish speaking before
+you talk.** The microphone is gated at the edge for the entire duration of
+her audio playback, so anything said over her is discarded before it
+reaches the pipeline — indistinguishable from the system being broken.
+
+Do not use the logs for timing. Terminal 2 prints
+`Utterance response complete. 6.30s of audio queued; caller audio is gated
+at the edge until playback ends` — synthesis finishes *seconds before*
+playback does. That number is how long you must wait. **Go by your ears,
+then leave a beat.**
+
+A conversation that reaches the AGREED path:
+
+1. "Hello." — wait
+2. "Yes, you are speaking with Rahul Sharma." — wait
+3. "Yes, it is a convenient time." — wait, she states ₹4,200
+4. **"Please give me the payment link."** — wait for her confirmation
+5. Pause ~2 seconds of silence so VAD closes the utterance
+6. Click **End Call**
+
+Step 5 matters: if you hang up inside VAD's 800ms silence threshold, the
+final utterance never reaches the transcript and the call may classify
+`UNCLEAR` instead of `AGREED`.
+
+**What to watch.** Terminal 2, after you hang up:
+
+```
+[session_...] Inbound stream closed. Signaling shutdown.
+[session_...] Outcome classified as AGREED in 0.858s.
+```
+
+Terminal 3:
+
+```
+[Session session_...] Call outcome classified: AGREED
+[Gateway] session session_...: reported outcome 'AGREED' to recovery orchestrator.
+```
+
+## Step 3 — Audit trail
+
+```powershell
+sqlite3 -header -column E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator\vasuli.db "SELECT event_type, event_data FROM audit_log ORDER BY id;"
+```
+
+```
+session_created     {"customer_name":"Rahul Sharma"}
+session_assigned    {"call_session_id":"session_..."}
+call_ended          {"outcome":"AGREED"}
+outcome_classified  {"outcome":"AGREED"}
+payment_link_sent   {"amount_paise":420000,"razorpay_link_id":"plink_...",...}
+```
+
+Every event timestamped, from queueing through the spoken conversation to
+the payment link. This is what the judging bar asks for.
+
+## Step 4 — Session state
+
+```powershell
+sqlite3 -header -column E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator\vasuli.db "SELECT customer_name, status, razorpay_link_id FROM recovery_sessions;"
+```
+
+Status is **`link_sent`**, not `recovered`. That distinction is deliberate:
+the customer agreed and a link exists, but no payment is confirmed.
+Claiming `recovered` here would overstate what happened. Step 5 is what
+makes it `recovered`.
+
+## Step 5 — Confirm payment via webhook
+
+**Git Bash** (needs `openssl`):
 
 ```bash
-curl -s http://localhost:8090/api/v1/campaigns/aug-emi-2026/metrics | python3 -m json.tool
-```
-
-Expected output at this stage:
-
-```json
-{
-  "total_accounts": 20,
-  "contacted": 0,
-  "breakdown": {
-    "recovered": 0,
-    "promised": 0,
-    "refused": 0,
-    "no_answer": 0
-  },
-  "pending": 20,
-  "stopped_max_attempts": 0
-}
-```
-
----
-
-## Step 3: Live Recovery Call — AGREED path
-
-Open `vasuli/var-thon/aetherRTC/index.html` in the browser. Click **Start Call**.
-
-Priya should speak within 3 seconds. If it takes longer, the LLM was not warmed.
-
-**Expected opening from Priya:**
-
-> "Hello, good morning! This is Priya calling on behalf of [merchant]. May I please speak with Rahul Sharma?"
-
-**How to conduct the demo conversation:**
-
-1. Confirm you are Rahul Sharma
-2. Let Priya explain the outstanding ₹4,200
-3. Agree to pay: "Yes, please send me the payment link"
-4. Priya responds: "I will arrange a payment link to be sent to your registered number shortly."
-5. Say "Thank you, goodbye" and end the call
-
-End the call by clicking **End Call** in the browser.
-
-**What to show judges in Terminal 3 logs:**
-
-```
-[Recovery] Session assigned: call_session_id=abc-123 → recovery_session_id=rec-001 (Rahul Sharma, ₹4,200)
-[Recovery] Call ended: session=abc-123, outcome=AGREED
-[Recovery] Payment link created: plink_XXXXXXXX for ₹4,200
-```
-
----
-
-## Step 4: Show the Audit Trail
-
-```bash
-sqlite3 vasuli/recovery-orchestrator/vasuli.db \
-  "SELECT event_type, json_extract(event_data,'$.outcome'), created_at
-   FROM audit_log
-   WHERE session_id = 'rec-001'
-   ORDER BY created_at;"
-```
-
-Expected output:
-
-```
-session_assigned  |         | 2026-09-01 10:05:12
-call_started      |         | 2026-09-01 10:05:12
-call_ended        | AGREED  | 2026-09-01 10:06:08
-outcome_classified| AGREED  | 2026-09-01 10:06:09
-payment_link_sent |         | 2026-09-01 10:06:09
-```
-
-**What to say:** "Every event is timestamped and stored. From the webhook that triggered recovery, through the call, to the payment link dispatch. This is the audit trail the judging bar asks for."
-
----
-
-## Step 5: Simulate Razorpay payment.captured
-
-```bash
-# Compute HMAC signature
-BODY='{"event":"payment.captured","payload":{"payment":{"entity":{"id":"pay_test_001"}}}}'
-SIG=$(echo -n "$BODY" | openssl dgst -sha256 -hmac "your_webhook_secret" | awk '{print $2}')
+cd /e/APPLICATIONS/CODING/project/vasuli/recovery-orchestrator
+SECRET=whsec_vasuli_demo
+LINK=$(sqlite3 vasuli.db "SELECT razorpay_link_id FROM recovery_sessions WHERE status='link_sent' LIMIT 1;")
+BODY="{\"event\":\"payment_link.paid\",\"payload\":{\"payment_link\":{\"entity\":{\"id\":\"$LINK\",\"status\":\"paid\"}},\"payment\":{\"entity\":{\"id\":\"pay_demo_capture_1\",\"status\":\"captured\"}}}}"
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
 
 curl -s -X POST http://localhost:8090/webhooks/razorpay \
   -H "Content-Type: application/json" \
@@ -164,111 +185,91 @@ curl -s -X POST http://localhost:8090/webhooks/razorpay \
   -d "$BODY"
 ```
 
-Then check the recovery session status:
+Terminal 1:
+`[Recovery] payment_link.paid confirmed recovery for link plink_... (payment pay_demo_capture_1)`
 
-```bash
-sqlite3 vasuli/recovery-orchestrator/vasuli.db \
-  "SELECT status, recovered_at FROM recovery_sessions WHERE id = 'rec-001';"
+```powershell
+sqlite3 -header -column E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator\vasuli.db "SELECT customer_name, status, recovered_at FROM recovery_sessions;"
 ```
 
-Expected: `recovered | 2026-09-01 10:07:00`
+Now `recovered`.
 
----
+**Worth saying out loud to judges:** the payment id in that webhook,
+`pay_demo_capture_1`, appears nowhere in the database. A customer paying a
+generated link creates a *new* payment unrelated to the failed one that
+started recovery, so the session is resolved by **payment link id**, not
+payment id. Matching on the payment id — the obvious-looking choice — would
+silently resolve nothing.
 
-## Step 6: Run the REFUSED path (second call)
+## Step 6 — Metrics
 
-Click **Start Call** again. The next customer is assigned automatically (queue-based).
-
-This time, refuse:
-
-- "I don't have money right now."
-- "I can't pay." (repeat if needed)
-- "Please don't call again."
-
-Expected Priya behavior: acknowledges after the third time, says "I understand, thank you for your time" and does not push further.
-
-**What to show judges:** The stopping rule activates. Check:
-
-```bash
-sqlite3 vasuli/recovery-orchestrator/vasuli.db \
-  "SELECT status FROM recovery_sessions WHERE call_session_id = 'abc-456';"
-# → refused
-
-# Verify this customer will not be assigned again:
-curl -X POST http://localhost:8090/api/v1/calls/assign \
-  -d '{"call_session_id":"test-probe"}'
-# Should return the NEXT customer, not the refused one
-```
-
----
-
-## Step 7: Final Metrics
-
-After running several calls (mix of AGREED, PROMISED, REFUSED):
-
-```bash
-curl -s http://localhost:8090/api/v1/campaigns/aug-emi-2026/metrics | python3 -m json.tool
+```powershell
+curl.exe -s http://localhost:8090/api/v1/campaigns/<campaign_id>/metrics
 ```
 
 ```json
-{
-  "campaign_id": "aug-emi-2026",
-  "campaign_name": "August Failed EMI Recovery",
-  "total_accounts": 20,
-  "contacted": 12,
-  "breakdown": {
-    "recovered": 5,
-    "recovered_amount_paise": 2140000,
-    "promised": 4,
-    "promised_amount_paise": 1780000,
-    "refused": 2,
-    "no_answer": 1
-  },
-  "pending": 8,
-  "stopped_max_attempts": 1,
-  "payment_links_sent": 5,
-  "razorpay_captured_confirmed": 3,
-  "generated_at": "2026-09-01T14:30:00Z"
-}
+{"total_accounts":1,"contacted":1,
+ "breakdown":{"recovered":1,"recovered_amount_paise":420000,...},
+ "pending":0,"payment_links_sent":1,"razorpay_captured_confirmed":1}
 ```
 
-**What to say:** "Across 12 contacted accounts: 5 recovered totalling ₹21,400, 4 with a promise-to-pay, 2 hard refusals. 3 Razorpay payment.captured webhooks confirmed. 1 account stopped by the max-attempts rule — no further contact will be made. 8 accounts pending."
+---
+
+## Optional: inbound `payment.failed`
+
+Demonstrates that a real Razorpay event can seed recovery, not just a
+manually loaded batch. Requires an **active campaign** to attach to.
+
+```bash
+SECRET=whsec_vasuli_demo
+BODY='{"event":"payment.failed","payload":{"payment":{"entity":{"id":"pay_inbound_demo","amount":189000,"currency":"INR","description":"Airtel Postpaid Bill","notes":{"customer_name":"Preethi Nair"}}}}}'
+SIG=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$SECRET" | awk '{print $2}')
+curl -s -X POST http://localhost:8090/webhooks/razorpay -H "Content-Type: application/json" -H "X-Razorpay-Signature: $SIG" -d "$BODY"
+```
+
+Preethi Nair is now queued and will be assigned to the next call.
 
 ---
 
-## Timing Targets
+## Timing targets
 
-| Moment                                            | Target        |
-| ------------------------------------------------- | ------------- |
-| Click Start Call → Priya speaks first word        | < 3 seconds   |
-| Customer utterance ends → Priya begins responding | < 2 seconds   |
-| Full recovery call (AGREED path)                  | 45–60 seconds |
-| Call ends → audit_log updated                     | < 5 seconds   |
-| Call ends → payment link created in Razorpay      | < 10 seconds  |
+| Moment | Target |
+| ------ | ------ |
+| Start Call → Priya's first word | < 3s (warm model) |
+| Utterance ends → Priya starts responding | < 2s |
+| Hang up → outcome in `audit_log` | < 5s |
 
-If Priya's first response takes more than 3 seconds in rehearsal, the LLM was not warmed. Warm it with a curl before the demo.
+Measured on RTX 3050 Mobile 4GB / Ryzen 5 6600H: STT ~0.67s, LLM TTFT
+~0.51s, classification ~0.86s, full teardown ~1s.
 
 ---
 
-## What to Do if Something Breaks
+## When something breaks
 
-**Priya doesn't speak after the call connects:**
+**Priya uses a generic greeting, no customer name.** Queue was empty —
+Terminal 3 says `recovery queue empty, using static profile 'Priya'`.
+Re-run Step 1.
 
-- Check Terminal 1 (Inference-Python) for errors
-- Check that VAD is receiving audio (look for `[VAD] speech started` in logs)
-- Most common cause: AetherRTC not running or audio track not negotiated
+**Priya is a dental receptionist.** Gateway started with
+`-profile receptionist`. Restart with `-profile recovery_agent`.
 
-**Recovery Orchestrator returns empty on assign:**
+**Nothing is detected after the first exchange.** You spoke while Priya's
+audio was still playing. Wait for her to finish, then leave a beat. See
+Step 2.
 
-- Check that the campaign was loaded: `sqlite3 vasuli.db "SELECT count(*) FROM recovery_sessions WHERE status='pending';"`
-- If 0: re-run the campaign load curl
+**Outcome is UNCLEAR after a clear agreement.** Known limitation of the 3B
+classifier: it over-weights the final turn, so a closing "no thanks, bye"
+can read as refusal. The system degrades safely — no payment link is
+created on an unclear call. Manual override:
 
-**Outcome classification returns UNCLEAR:**
+```bash
+curl -s -X POST http://localhost:8090/api/v1/calls/<call_session_id>/end -H "Content-Type: application/json" -d '{"outcome":"AGREED"}'
+```
 
-- Acceptable. Have a manual fallback: `curl -X POST .../api/v1/calls/<id>/end -d '{"outcome":"AGREED"}'`
-- Mention to judges: "For this call the classifier was uncertain — production would include a human review queue for UNCLEAR cases. I've manually marked it for the demo."
+**Webhook returns 400.** The secret in your shell does not match
+`-razorpay-webhook-secret`, or the body was modified after signing. Sign
+the exact bytes you send.
 
-**Payment link creation fails:**
-
-- Check Razorpay API keys are test-mode (not live)
-- Check `razorpay-key-id` starts with `rzp_test_`
+**Payment link creation fails against live keys.** The error carries
+Razorpay's own description — check Terminal 1. Confirm the key starts with
+`rzp_test_`.

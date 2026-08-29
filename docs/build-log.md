@@ -238,7 +238,7 @@ Verified live, `session_66867`: six exchanges, `AGREED` classified in
 0.858s, payment link created, complete audit trail. See `docs/roadmap.md`
 M5 for the verification log.
 
-### Deferred with eyes open
+### Deferred with eyes open (M5)
 
 Speech still accumulating in the VAD detector when a caller disconnects
 is discarded rather than flushed into classification. The failure mode
@@ -247,3 +247,105 @@ VAD's 800ms silence threshold leaves that agreement unclassified, and the
 call resolves `UNCLEAR` instead of `AGREED`. Flushing costs ~0.7s of STT
 at teardown and is a small change if rehearsal shows it matters. Logged
 explicitly when it happens, so the evidence exists either way.
+
+### Prompt tuning, stopped deliberately
+
+Priya's replies were running 19–23 seconds of synthesized audio per turn,
+and the microphone is gated for that entire duration — a long reply is not
+merely verbose, it locks the customer out of the conversation. A revised
+system prompt (hard word cap, one objective per turn, explicit "this is
+spoken aloud") cut that to ~6s per turn, measured over five simulated
+turns: **64s across 3 turns became 29.5s across 5.**
+
+That work was then reverted, deliberately. Two reasons, both sound:
+
+1. Tightening the prompt to fix response length started to distort other
+   behaviour, and each fix needed a fresh round of live testing to
+   validate.
+2. Outcome classification was also failing on the same class of problem —
+   with the deadline close, spending hours coaxing better instruction
+   following out of a 3B model is a poor use of the remaining time
+   compared to finishing Razorpay integration and rehearsal.
+
+Worth recording precisely what was measured, because the honest version
+of this is more defensible than the easy version. The classifier returned
+`REFUSED` three times out of three for a conversation where the customer
+said *"please give me the payment link"* — the model anchors on the final
+user turn (a polite "no thanks, bye") and discards earlier agreement. A
+prompt variant fixed exactly that case, 3/3 correct, but then
+over-triggered `AGREED` on genuinely refused and genuinely unclear
+conversations. So: **not purely a model-capacity limit, and not purely a
+prompt problem — it is a small model failing to hold two competing
+constraints at once.** A larger model would very likely hold both.
+
+The system degrades correctly regardless: an unrecognised or low-confidence
+classification falls back to `UNCLEAR`, and no payment link is created on
+a call that was not clearly an agreement. Every deterministic layer —
+transport, VAD, state machine, payment-link creation, audit trail — is
+unaffected.
+
+---
+
+## 2026-08-28 — M6: Razorpay integration, and a bug found by reading docs
+
+### The demo's final step would have silently done nothing
+
+**What we were doing:** planning M6's webhook consumer, specifically which
+database column each webhook event should match a session on.
+
+**What was wrong:** `HandlePaymentCaptured` (written back in M2) looks up
+sessions by `razorpay_payment_id` — the id of the *original failed
+payment* that triggered recovery. The assumption was that a later
+`payment.captured` would carry that same id.
+
+Checking Razorpay's actual webhook documentation before writing the
+handler showed it does not. A payment made against a payment link Vasuli
+generated is a **new payment** with a **new id**, unrelated to the failed
+one. The correct identifier is on a different event entirely:
+`payment_link.paid`, at `payload.payment_link.entity.id` — which matches
+the `plink_...` value already stored in `razorpay_link_id`.
+
+So the lookup would have matched nothing, marked nothing recovered, and
+produced no error — the demo's closing step, quietly doing nothing.
+
+**Fix:** two independent paths, matched on different columns.
+`payment.captured` → `razorpay_payment_id` (the demo's simulated capture
+of the original failed payment). `payment_link.paid` → `razorpay_link_id`
+(a real customer paying a generated link). Verified with a webhook
+carrying payment id `pay_BRANDNEW999`, a value present nowhere in the
+database: it resolved correctly via the link id and marked the session
+recovered.
+
+**Lesson:** this one was found by reading vendor documentation during
+design rather than by debugging a failure, and it is the cheapest bug in
+this log by a wide margin. It would otherwise have surfaced during
+rehearsal, or worse, in front of judges — as "nothing happens", with no
+error anywhere to grep for. Integration assumptions about someone else's
+API are worth ten minutes of verification before they are worth an hour
+of debugging.
+
+### Log lines that lie, again
+
+The first working version logged `payment_link.paid confirmed recovery`
+on *every* delivery, including redeliveries that correctly changed
+nothing. The database was right — one audit row, one session — but the
+log claimed two recoveries.
+
+This is the same defect as M5's `Utterance response complete`: a log line
+that is technically true and practically misleading. Having just spent
+three debugging cycles on exactly that, it was fixed immediately rather
+than left. The handlers now report whether state actually changed, so a
+duplicate reads as `duplicate delivery, ignoring`.
+
+Webhook delivery is at-least-once by design, so redelivery is the normal
+path, not an edge case: `payment.failed` also dedupes on
+`razorpay_payment_id` before creating a session, or a retried delivery
+would queue the same customer for a second call.
+
+### Refusing to start on live credentials
+
+`buildRazorpayClient` rejects any key without an `rzp_test_` prefix.
+Vasuli generates payment demands autonomously from an AI conversation;
+the gap between test and live mode is one CLI flag, and the failure mode
+of getting it wrong is real payment requests to real people. That is
+worth enforcing in code rather than trusting to whoever types the command.
