@@ -30,11 +30,22 @@ func logFatal(format string, v ...any) {
 }
 
 func main() {
+	// Loaded before the flags are declared, because each credential flag
+	// reads its default from the environment at declaration time. That
+	// gives precedence for free with no merge logic: an explicit flag
+	// beats the shell environment, which beats the file.
+	if err := loadDotEnv(".env"); err != nil {
+		logFatal("Failed to load .env: %v", err)
+	}
+
 	port := flag.String("port", ":8090", "HTTP listen address")
 	dbPath := flag.String("db", "./vasuli.db", "SQLite database path")
-	razorpayKeyID := flag.String("razorpay-key-id", "", "Razorpay test-mode key ID (empty uses the stub client)")
-	razorpayKeySecret := flag.String("razorpay-key-secret", "", "Razorpay test-mode key secret")
-	webhookSecret := flag.String("razorpay-webhook-secret", "", "Shared secret inbound webhooks are signed with")
+	razorpayKeyID := flag.String("razorpay-key-id", os.Getenv("RAZORPAY_KEY_ID"),
+		"Razorpay test-mode key ID (env: RAZORPAY_KEY_ID; empty uses the stub client)")
+	razorpayKeySecret := flag.String("razorpay-key-secret", os.Getenv("RAZORPAY_KEY_SECRET"),
+		"Razorpay test-mode key secret (env: RAZORPAY_KEY_SECRET)")
+	webhookSecret := flag.String("razorpay-webhook-secret", os.Getenv("RAZORPAY_WEBHOOK_SECRET"),
+		"Shared secret inbound webhooks are signed with (env: RAZORPAY_WEBHOOK_SECRET)")
 	flag.Parse()
 
 	db, err := store.Open(*dbPath)

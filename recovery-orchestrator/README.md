@@ -74,13 +74,18 @@ interface:
 go run ./cmd -port :8090 -db ./vasuli.db
 ```
 
-| Flag | Default | Meaning |
-| ---- | ------- | ------- |
-| `-port` | `:8090` | HTTP listen address |
-| `-db` | `./vasuli.db` | SQLite database path (created if absent) |
-| `-razorpay-key-id` | *(empty)* | Test-mode key ID. Empty uses the stub client |
-| `-razorpay-key-secret` | *(empty)* | Test-mode key secret |
-| `-razorpay-webhook-secret` | *(empty)* | Shared secret inbound webhooks are signed with |
+| Flag | Env fallback | Default | Meaning |
+| ---- | ------------ | ------- | ------- |
+| `-port` | — | `:8090` | HTTP listen address |
+| `-db` | — | `./vasuli.db` | SQLite database path (created if absent) |
+| `-razorpay-key-id` | `RAZORPAY_KEY_ID` | *(empty)* | Test-mode key ID. Empty uses the stub client |
+| `-razorpay-key-secret` | `RAZORPAY_KEY_SECRET` | *(empty)* | Test-mode key secret |
+| `-razorpay-webhook-secret` | `RAZORPAY_WEBHOOK_SECRET` | *(empty)* | Shared secret inbound webhooks are signed with |
+
+Credentials resolve **flag > shell environment > `.env`**. A `.env` file in
+the working directory is loaded at startup; it is gitignored and must not
+be committed. Each flag's default is read from the environment, so
+precedence needs no merge logic.
 
 On startup, the service applies its schema (idempotent — safe to run
 against an existing database) and starts listening.
@@ -383,6 +388,7 @@ vertical slices rather than strictly sequentially.
 recovery-orchestrator/
 ├── cmd/main.go                      Composition root: DB, Razorpay client,
 │                                     campaign manager, router, listener
+├── cmd/env.go                       .env loader (no external dependency)
 ├── internal/
 │   ├── api/
 │   │   ├── router.go                stdlib http.ServeMux routing table

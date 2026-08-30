@@ -104,33 +104,45 @@ AetherRTC requires no configuration changes. It points to `localhost:50052` (var
 ## Razorpay Test-Mode Setup
 
 1. Create an account at [razorpay.com](https://razorpay.com) if you don't have one
-2. Switch to test mode in the Dashboard
+2. Switch to **Test Mode** in the Dashboard
 3. Settings → API Keys → Generate Test Key Pair → copy Key ID and Key Secret
-4. Settings → Webhooks → Add New Webhook:
-   - URL: `http://localhost:8090/webhooks/razorpay`
-   - Active events: `payment.failed`, `payment.captured`
-   - Copy the webhook secret
+
+That is the entire setup. Test-mode keys require no website and no KYC —
+those apply only to live mode, which Vasuli refuses to run against.
+
+**Do not add a webhook in the Dashboard.** That form requires a public
+HTTPS URL, which would mean hosting or a tunnel. Vasuli signs its own
+webhook requests locally instead: the secret is a string you choose, shared
+between the server and the `curl` that sends the event. The verification
+path exercised is identical either way, without the external dependency.
+See `docs/demo.md` Step 5.
 
 ---
 
 ## Environment Variables
 
-Create `recovery-orchestrator/.env` (do not commit this file):
+Create `recovery-orchestrator/.env` (gitignored, never commit it):
 
 ```env
 RAZORPAY_KEY_ID=rzp_test_XXXXXXXXXXXX
 RAZORPAY_KEY_SECRET=YYYYYYYYYYYYYYYYYYYY
-RAZORPAY_WEBHOOK_SECRET=ZZZZZZZZZZZZZZZZ
+RAZORPAY_WEBHOOK_SECRET=whsec_vasuli_demo
 ```
 
-Or pass as flags:
+`RAZORPAY_WEBHOOK_SECRET` is invented by you, not issued by Razorpay. Only
+the first two come from the Dashboard.
+
+The file is read at startup relative to the working directory, so start the
+service from `recovery-orchestrator/`. Precedence is **flag > shell
+environment > `.env`**, so a flag can still override for a single run:
 
 ```bash
-go run ./cmd/main.go \
-  -razorpay-key-id     $RAZORPAY_KEY_ID \
-  -razorpay-key-secret $RAZORPAY_KEY_SECRET \
-  -razorpay-webhook-secret $RAZORPAY_WEBHOOK_SECRET
+go run ./cmd -razorpay-key-id rzp_test_OTHER -razorpay-key-secret OTHER
 ```
+
+With no credentials at all the service runs against a stub client that
+fabricates payment links locally — every endpoint including the webhook
+consumer still works.
 
 ---
 
@@ -153,7 +165,7 @@ go run ./cmd/gateway-server \
 
 # 3. Recovery Orchestrator
 cd recovery-orchestrator
-go run ./cmd/main.go -port :8090 -db ./vasuli.db [credentials]
+go run ./cmd -port :8090 -db ./vasuli.db   # credentials come from .env
 
 # 4. AetherRTC
 cd aetherRTC
