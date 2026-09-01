@@ -174,11 +174,20 @@ A conversation that reaches the AGREED path:
 1. "Hello." — wait
 2. "Yes, you are speaking with Rahul Sharma." — wait
 3. **"Please give me the payment link."** — wait for her confirmation
-4. Pause ~2 seconds of silence so VAD closes the utterance
-5. Click **End Call**
+4. Optionally "Thank you." — wait
+5. Pause ~2 seconds of silence so VAD closes the utterance
+6. Click **End Call**
 
-Step 4 matters: hanging up inside VAD's 800ms silence threshold loses the
-final utterance, and the call may classify `UNCLEAR` instead of `AGREED`.
+Two things matter here, both measured:
+
+**Never end with a phrase containing "no".** "No thanks, bye" classifies
+the whole call as `REFUSED` — three times out of three — even after a clear
+agreement, because the classifier reads that "no" as refusing the payment.
+"Thank you." classifies `AGREED` three times out of three. Close politely
+or simply stop talking.
+
+**Leave the silence before hanging up.** Cutting off inside VAD's 800ms
+threshold loses the final utterance, and the call may classify `UNCLEAR`.
 
 **What to watch.** Terminal 2, after you hang up:
 
@@ -332,10 +341,11 @@ Re-run Step 1.
 **Priya is a dental receptionist.** Gateway started with
 `-profile receptionist`. Restart with `-profile recovery_agent`.
 
-**Outcome is UNCLEAR after a clear agreement.** Known limitation of the 3B
-classifier: it over-weights the final turn, so a closing "no thanks, bye"
-can read as refusal. The system degrades safely — no payment link on an
-unclear call. Manual override:
+**Outcome is REFUSED or UNCLEAR after a clear agreement.** Almost always
+the closing phrase — see Step 2. A final turn containing "no" (as in "no
+thanks") flips the classification to `REFUSED`. The system degrades safely:
+no payment link is created on a call that was not clearly an agreement.
+Manual override:
 
 ```bash
 curl -s -X POST http://localhost:8090/api/v1/calls/<call_session_id>/end -H "Content-Type: application/json" -d '{"outcome":"AGREED"}'
