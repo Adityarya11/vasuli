@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -48,6 +49,20 @@ func Open(path string) (*DB, error) {
 func (db *DB) Close() error {
 	return db.conn.Close()
 }
+
+// Recovery session statuses. These mirror the CHECK constraint in
+// schema.sql; changing one without the other will surface as a write
+// rejected by the database.
+const (
+	StatusPending   = "pending"   // queued, not yet contacted
+	StatusActive    = "active"    // a call is in progress
+	StatusLinkSent  = "link_sent" // agreed, link created, payment unconfirmed
+	StatusPromised  = "promised"  // committed to a future date
+	StatusRefused   = "refused"   // declined; excluded from further contact
+	StatusUnclear   = "unclear"   // no clear resolution, awaiting manual review
+	StatusRecovered = "recovered" // payment confirmed
+	StatusFailed    = "failed"    // contact attempts exhausted
+)
 
 type Campaign struct {
 	ID        string
@@ -254,63 +269,82 @@ func (db *DB) scanSession(row *sql.Row) (*RecoverySession, error) {
 	return &s, nil
 }
 
-func (db *DB) SetCallEnded(sessionID string) error {
-	_, err := db.conn.Exec(
-		`UPDATE recovery_sessions SET call_ended_at = CURRENT_TIMESTAMP WHERE id = ?`,
-		sessionID,
+// AuditEvent is one row destined for the audit log.
+type AuditEvent struct {
+	Type string
+	Data any
+}
+
+// OutcomeWrite is the complete set of changes a finished call produces.
+// It is applied as a unit so the audit trail can never disagree with the
+// state it audits.
+type OutcomeWrite struct {
+	SessionID      string
+	Status         string
+	PromiseDate    string
+	RazorpayLinkID string
+	Events         []AuditEvent
+}
+
+// RecordOutcome applies an OutcomeWrite in a single transaction, but only
+// if the session is still in one of allowedFrom. It reports false when the
+// session has moved on, leaving the database untouched.
+//
+// The status is re-checked inside the transaction rather than trusted from
+// an earlier read, so two requests racing to end the same call cannot both
+// commit: the loser sees the winner's status and is rejected. Everything
+// here is local database work; the payment-link API call happens before
+// this is invoked, precisely so no network round trip is held inside a
+// transaction that blocks every other writer.
+func (db *DB) RecordOutcome(w OutcomeWrite, allowedFrom []string) (bool, error) {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return false, fmt.Errorf("store: begin outcome tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var current string
+	err = tx.QueryRow(`SELECT status FROM recovery_sessions WHERE id = ?`, w.SessionID).Scan(&current)
+	if err == sql.ErrNoRows {
+		return false, fmt.Errorf("store: no session %q", w.SessionID)
+	}
+	if err != nil {
+		return false, fmt.Errorf("store: read status for outcome: %w", err)
+	}
+
+	if !slices.Contains(allowedFrom, current) {
+		return false, nil
+	}
+
+	_, err = tx.Exec(
+		`UPDATE recovery_sessions
+		    SET status = ?,
+		        call_ended_at = CURRENT_TIMESTAMP,
+		        promise_date = COALESCE(NULLIF(?, ''), promise_date),
+		        razorpay_link_id = COALESCE(NULLIF(?, ''), razorpay_link_id)
+		  WHERE id = ?`,
+		w.Status, w.PromiseDate, w.RazorpayLinkID, w.SessionID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: set call ended: %w", err)
+		return false, fmt.Errorf("store: apply outcome: %w", err)
 	}
-	return nil
+
+	for _, event := range w.Events {
+		if err := insertAuditLogTx(tx, w.SessionID, event.Type, event.Data); err != nil {
+			return false, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("store: commit outcome: %w", err)
+	}
+	return true, nil
 }
 
-func (db *DB) MarkLinkSent(sessionID, razorpayLinkID string) error {
-	_, err := db.conn.Exec(
-		`UPDATE recovery_sessions SET status = 'link_sent', razorpay_link_id = ? WHERE id = ?`,
-		razorpayLinkID, sessionID,
-	)
-	if err != nil {
-		return fmt.Errorf("store: mark link sent: %w", err)
-	}
-	return nil
-}
-
-func (db *DB) MarkPromised(sessionID, promiseDate string) error {
-	_, err := db.conn.Exec(
-		`UPDATE recovery_sessions SET status = 'promised', promise_date = ? WHERE id = ?`,
-		promiseDate, sessionID,
-	)
-	if err != nil {
-		return fmt.Errorf("store: mark promised: %w", err)
-	}
-	return nil
-}
-
-func (db *DB) MarkRefused(sessionID string) error {
-	_, err := db.conn.Exec(`UPDATE recovery_sessions SET status = 'refused' WHERE id = ?`, sessionID)
-	if err != nil {
-		return fmt.Errorf("store: mark refused: %w", err)
-	}
-	return nil
-}
-
-func (db *DB) MarkUnclear(sessionID string) error {
-	_, err := db.conn.Exec(`UPDATE recovery_sessions SET status = 'unclear' WHERE id = ?`, sessionID)
-	if err != nil {
-		return fmt.Errorf("store: mark unclear: %w", err)
-	}
-	return nil
-}
-
-func (db *DB) MarkFailedMaxAttempts(sessionID string) error {
-	_, err := db.conn.Exec(`UPDATE recovery_sessions SET status = 'failed' WHERE id = ?`, sessionID)
-	if err != nil {
-		return fmt.Errorf("store: mark failed: %w", err)
-	}
-	return nil
-}
-
+// MarkRecovered is the one single-statement status write that remains.
+// Confirming a payment changes exactly one thing and is driven by a webhook
+// whose own idempotency check sits in the campaign layer, so it does not
+// need the transactional treatment RecordOutcome gives a call's outcome.
 func (db *DB) MarkRecovered(sessionID string) error {
 	_, err := db.conn.Exec(
 		`UPDATE recovery_sessions SET status = 'recovered', recovered_at = CURRENT_TIMESTAMP WHERE id = ?`,
@@ -325,6 +359,16 @@ func (db *DB) MarkRecovered(sessionID string) error {
 // InsertAuditLog writes one immutable event row. eventData is marshaled to
 // JSON as-is — pass a map[string]any or a small struct.
 func (db *DB) InsertAuditLog(sessionID, eventType string, eventData any) error {
+	return insertAuditLogTx(db.conn, sessionID, eventType, eventData)
+}
+
+// execer is satisfied by both *sql.DB and *sql.Tx, so audit rows are
+// written identically whether or not they are part of a transaction.
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func insertAuditLogTx(e execer, sessionID, eventType string, eventData any) error {
 	var payload []byte
 	if eventData != nil {
 		var err error
@@ -334,7 +378,7 @@ func (db *DB) InsertAuditLog(sessionID, eventType string, eventData any) error {
 		}
 	}
 
-	_, err := db.conn.Exec(
+	_, err := e.Exec(
 		`INSERT INTO audit_log (session_id, event_type, event_data) VALUES (?, ?, ?)`,
 		sessionID, eventType, string(payload),
 	)
@@ -342,6 +386,30 @@ func (db *DB) InsertAuditLog(sessionID, eventType string, eventData any) error {
 		return fmt.Errorf("store: insert audit log: %w", err)
 	}
 	return nil
+}
+
+// AuditEventsForSession returns the event types recorded against a session
+// in the order they occurred. The audit trail is the primary evidence this
+// system produces, so being able to assert on its shape matters as much as
+// being able to read it.
+func (db *DB) AuditEventsForSession(sessionID string) ([]string, error) {
+	rows, err := db.conn.Query(
+		`SELECT event_type FROM audit_log WHERE session_id = ? ORDER BY id`, sessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: audit events: %w", err)
+	}
+	defer rows.Close()
+
+	var events []string
+	for rows.Next() {
+		var eventType string
+		if err := rows.Scan(&eventType); err != nil {
+			return nil, fmt.Errorf("store: scan audit event: %w", err)
+		}
+		events = append(events, eventType)
+	}
+	return events, rows.Err()
 }
 
 type Metrics struct {

@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"time"
 
 	"vasuli/recovery-orchestrator/internal/razorpay"
 	"vasuli/recovery-orchestrator/internal/store"
@@ -23,29 +24,46 @@ import (
 // HandlePaymentFailed.
 var ErrNoActiveCampaign = errors.New("campaign: no active campaign to attach this payment to")
 
-const systemPromptTemplate = `You are Priya, a professional payment recovery specialist calling on behalf
-of a Razorpay merchant.
+// systemPromptTemplate is rendered per customer at campaign-load time and
+// reaches var-thon as a finished string.
+//
+// The constraints here are shaped by how the output is consumed. Every word
+// is synthesized and played down a phone line, and the caller's microphone
+// is gated at the edge for the whole of that playback — so a long reply does
+// not merely ramble, it locks the customer out of the conversation for as
+// many seconds as it takes to speak. Hence the per-turn word limit and the
+// one-question rule, which replaced a numbered objective list that invited
+// the model to complete every step in a single breath.
+const systemPromptTemplate = `You are Priya. You work for a Razorpay merchant and you are on a live
+phone call right now with that merchant's customer.
 
-You are calling {{.CustomerName}} regarding an outstanding payment of
-₹{{.AmountFormatted}} for {{.ProductName}} that was due on {{.DueDate}}.
+You are calling {{.CustomerName}}. They owe ₹{{.AmountFormatted}} for
+{{.ProductName}}, which was due on {{.DueDate}} and is still unpaid.
 
-Your objectives in order:
-1. Greet {{.CustomerName}} and confirm you are speaking with them.
-2. State the outstanding amount clearly: ₹{{.AmountFormatted}} for {{.ProductName}}.
-3. Offer to help them pay now — you will arrange a payment link.
-4. If they cannot pay now, get a specific date and confirm it back to them.
-5. If they decline, acknowledge respectfully and close.
+How to speak:
+- Everything you write is spoken aloud. Write only words meant to be heard.
+- Keep each reply under 40 words, and ask at most one question in it.
+- Say one thing, then stop and let {{.CustomerName}} answer.
+- Never write parentheses, asides, or notes about your own reasoning.
+- Speak natural, professional Indian English.
+
+How the call goes, one step per turn:
+1. Greet {{.CustomerName}} and check you are speaking to them.
+2. Once confirmed, tell them the amount, what it is for, and that it is overdue.
+3. Ask whether they can pay now.
+4. If they cannot, ask for a date they can pay by.
+5. Thank them and close.
 
 Rules:
 - Never be aggressive, threatening, or pressuring.
-- Do not mention the payment more than three times if refused.
-- If they agree: say exactly "I will arrange a payment link to be sent
-  to your registered number shortly."
-- If they give a date: repeat it back — "So you will pay by [date],
-  I have noted that down."
-- If they refuse: say "I understand, thank you for your time."
-- Keep the call under 3 minutes.
-- Speak professional Indian English.
+- Do not raise the payment again more than three times if they decline.
+- If they agree to pay, say exactly "I will arrange a payment link to be
+  sent to your registered number shortly."
+- If they give a date, repeat that date back to confirm it.
+- If they refuse, say "I understand, thank you for your time." and stop asking.
+- State the amount once. Do not repeat it in every reply.
+- Do not thank them and close until the call is actually ending.
+- {{.DueDate}} is already past. Never offer it as a date they could pay on.
 `
 
 type promptData struct {
@@ -114,7 +132,7 @@ func (m *Manager) renderSystemPrompt(acc store.Account) (string, error) {
 		CustomerName:    acc.CustomerName,
 		AmountFormatted: formatRupees(acc.OutstandingPaise),
 		ProductName:     acc.ProductName,
-		DueDate:         acc.DueDate,
+		DueDate:         formatDueDate(acc.DueDate),
 	}
 	if err := m.promptTemplate.Execute(&buf, data); err != nil {
 		return "", fmt.Errorf("campaign: render system prompt: %w", err)
@@ -151,10 +169,38 @@ const (
 	OutcomeUnclear = "UNCLEAR"
 )
 
+// endSessionAllowedFrom is the set of statuses an outcome may be recorded
+// from. Everything absent from it is either already settled or terminal.
+//
+// This exists because EndSession has side effects that must not repeat:
+// recording AGREED twice would create a second payment link and duplicate
+// the audit trail. More importantly, without it a session already marked
+// refused could be dragged back into link_sent by a stray or replayed
+// call — re-engaging a customer who declined, which is exactly what the
+// stopping rules exist to prevent.
+//
+// unclear is included deliberately: it means the classifier reached no
+// verdict, and correcting that by hand is a documented operator action
+// (see docs/demo.md), not a duplicate.
+var endSessionAllowedStatuses = []string{store.StatusActive, store.StatusUnclear}
+
+var endSessionAllowedFrom = map[string]bool{
+	store.StatusActive:  true,
+	store.StatusUnclear: true,
+}
+
+// ErrOutcomeAlreadyRecorded reports an EndSession against a session whose
+// outcome is already settled or terminal. Benign rather than exceptional:
+// the caller acknowledges it and makes no change.
+var ErrOutcomeAlreadyRecorded = errors.New("campaign: session outcome is already recorded")
+
 // EndSession records the outcome of a completed call and applies the
 // consequence for that outcome — payment link creation for AGREED, a
 // promise date for PROMISED, a permanent stop for REFUSED, and either a
 // retry-eligible or exhausted state for UNCLEAR.
+//
+// Idempotent: a repeat call for a session that already has an outcome
+// makes no change and creates no second payment link.
 func (m *Manager) EndSession(ctx context.Context, callSessionID, outcome, promiseDate string) error {
 	sess, err := m.db.GetSessionByCallSessionID(callSessionID)
 	if err != nil {
@@ -164,72 +210,97 @@ func (m *Manager) EndSession(ctx context.Context, callSessionID, outcome, promis
 		return fmt.Errorf("campaign: no session bound to call_session_id %q", callSessionID)
 	}
 
-	if err := m.db.SetCallEnded(sess.ID); err != nil {
+	if !endSessionAllowedFrom[sess.Status] {
+		return ErrOutcomeAlreadyRecorded
+	}
+
+	// The payment link is created before anything is written, so a provider
+	// failure cannot leave a session claiming a link that does not exist.
+	// The reverse ordering is the known gap: a link created here whose
+	// response never arrives is orphaned, since nothing records it. See
+	// docs/build-log.md.
+	var link *razorpay.PaymentLinkResponse
+	if outcome == OutcomeAgreed {
+		link, err = m.razorpay.CreatePaymentLink(ctx, razorpay.PaymentLinkRequest{
+			AmountPaise:  sess.OutstandingPaise,
+			Description:  "Payment recovery — " + sess.ProductName,
+			CustomerName: sess.CustomerName,
+		})
+		if err != nil {
+			_ = m.db.InsertAuditLog(sess.ID, "payment_link_failed", map[string]any{"error": err.Error()})
+			return fmt.Errorf("campaign: create payment link: %w", err)
+		}
+	}
+
+	write := m.buildOutcomeWrite(sess, outcome, promiseDate, link)
+
+	applied, err := m.db.RecordOutcome(write, endSessionAllowedStatuses)
+	if err != nil {
 		return err
 	}
-	if err := m.db.InsertAuditLog(sess.ID, "call_ended", map[string]any{"outcome": outcome}); err != nil {
-		return err
+	if !applied {
+		// The status changed between the read above and the transaction,
+		// meaning another request recorded an outcome first.
+		return ErrOutcomeAlreadyRecorded
 	}
-	if err := m.db.InsertAuditLog(sess.ID, "outcome_classified", map[string]any{"outcome": outcome}); err != nil {
-		return err
+	return nil
+}
+
+// buildOutcomeWrite maps an outcome to the status and audit events it
+// produces. Assembling the whole change first is what lets it be applied
+// atomically — the status and the audit rows explaining it commit together
+// or not at all.
+func (m *Manager) buildOutcomeWrite(
+	sess *store.RecoverySession,
+	outcome, promiseDate string,
+	link *razorpay.PaymentLinkResponse,
+) store.OutcomeWrite {
+	write := store.OutcomeWrite{
+		SessionID: sess.ID,
+		Events: []store.AuditEvent{
+			{Type: "call_ended", Data: map[string]any{"outcome": outcome}},
+			{Type: "outcome_classified", Data: map[string]any{"outcome": outcome}},
+		},
 	}
 
 	switch outcome {
 	case OutcomeAgreed:
-		return m.handleAgreed(ctx, sess)
+		write.Status = store.StatusLinkSent
+		write.RazorpayLinkID = link.ID
+		write.Events = append(write.Events, store.AuditEvent{
+			Type: "payment_link_sent",
+			Data: map[string]any{
+				"razorpay_link_id": link.ID,
+				"short_url":        link.ShortURL,
+				"amount_paise":     sess.OutstandingPaise,
+			},
+		})
+
 	case OutcomePromised:
-		return m.handlePromised(sess, promiseDate)
+		write.Status = store.StatusPromised
+		write.PromiseDate = promiseDate
+		write.Events = append(write.Events, store.AuditEvent{
+			Type: "promise_logged",
+			Data: map[string]any{"promise_date": promiseDate},
+		})
+
 	case OutcomeRefused:
-		if err := m.db.MarkRefused(sess.ID); err != nil {
-			return err
-		}
-		return m.db.InsertAuditLog(sess.ID, "stopped_refused", nil)
+		write.Status = store.StatusRefused
+		write.Events = append(write.Events, store.AuditEvent{Type: "stopped_refused"})
+
 	default:
-		return m.handleUnclear(sess)
-	}
-}
-
-func (m *Manager) handleAgreed(ctx context.Context, sess *store.RecoverySession) error {
-	resp, err := m.razorpay.CreatePaymentLink(ctx, razorpay.PaymentLinkRequest{
-		AmountPaise:  sess.OutstandingPaise,
-		Description:  "Payment recovery — " + sess.ProductName,
-		CustomerName: sess.CustomerName,
-	})
-	if err != nil {
-		_ = m.db.InsertAuditLog(sess.ID, "payment_link_failed", map[string]any{"error": err.Error()})
-		return fmt.Errorf("campaign: create payment link: %w", err)
-	}
-
-	if err := m.db.MarkLinkSent(sess.ID, resp.ID); err != nil {
-		return err
-	}
-
-	return m.db.InsertAuditLog(sess.ID, "payment_link_sent", map[string]any{
-		"razorpay_link_id": resp.ID,
-		"short_url":        resp.ShortURL,
-		"amount_paise":     sess.OutstandingPaise,
-	})
-}
-
-func (m *Manager) handlePromised(sess *store.RecoverySession, promiseDate string) error {
-	if err := m.db.MarkPromised(sess.ID, promiseDate); err != nil {
-		return err
-	}
-	return m.db.InsertAuditLog(sess.ID, "promise_logged", map[string]any{"promise_date": promiseDate})
-}
-
-// handleUnclear applies the max-attempts stopping rule: a session that has
-// exhausted its retry budget is permanently failed rather than left
-// eligible for re-assignment, matching the stopping rules documented in
-// docs/architecture.md.
-func (m *Manager) handleUnclear(sess *store.RecoverySession) error {
-	if sess.ContactAttempts >= sess.MaxContactAttempts {
-		if err := m.db.MarkFailedMaxAttempts(sess.ID); err != nil {
-			return err
+		// UNCLEAR, and anything unrecognised. A session that has used up its
+		// contact budget is failed permanently rather than left eligible for
+		// another call, per the stopping rules in docs/architecture.md.
+		if sess.ContactAttempts >= sess.MaxContactAttempts {
+			write.Status = store.StatusFailed
+			write.Events = append(write.Events, store.AuditEvent{Type: "stopped_max_attempts"})
+		} else {
+			write.Status = store.StatusUnclear
 		}
-		return m.db.InsertAuditLog(sess.ID, "stopped_max_attempts", nil)
 	}
-	return m.db.MarkUnclear(sess.ID)
+
+	return write
 }
 
 // ErrSessionNotFound reports a webhook that refers to a session this system
@@ -285,7 +356,7 @@ func (m *Manager) HandlePaymentLinkPaid(razorpayLinkID, razorpayPaymentID string
 // redelivered webhook neither writes a second audit row nor reads as a
 // second recovery in the logs.
 func (m *Manager) markRecovered(sess *store.RecoverySession, auditData map[string]any) (bool, error) {
-	if sess.Status == "recovered" {
+	if sess.Status == store.StatusRecovered {
 		return false, nil
 	}
 
@@ -383,6 +454,19 @@ func randomID(prefix string) (string, error) {
 		return "", fmt.Errorf("campaign: id generation: %w", err)
 	}
 	return prefix + hex.EncodeToString(buf), nil
+}
+
+// formatDueDate turns a stored ISO date into something a speech synthesizer
+// reads correctly. Piper pronounces "2026-08-15" as digits and dashes;
+// "15 August 2026" is pronounced as a date. Input that is not an ISO date
+// passes through untouched — the field is caller-supplied, and a malformed
+// date should not fail campaign creation.
+func formatDueDate(due string) string {
+	parsed, err := time.Parse("2006-01-02", due)
+	if err != nil {
+		return due
+	}
+	return parsed.Format("2 January 2006")
 }
 
 // formatRupees converts paise to a comma-grouped rupee string (e.g.

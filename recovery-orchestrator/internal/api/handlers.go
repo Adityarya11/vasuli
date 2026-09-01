@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 
@@ -171,7 +172,21 @@ func (h *Handlers) EndCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.manager.EndSession(r.Context(), callSessionID, req.Outcome, req.PromiseDate); err != nil {
+	err := h.manager.EndSession(r.Context(), callSessionID, req.Outcome, req.PromiseDate)
+
+	// An outcome already recorded is not a failure. var-thon reports every
+	// session end exactly once, but a retry, a replay, or an operator
+	// re-running the documented manual override would otherwise be logged
+	// as an error for a request that behaved correctly by changing nothing.
+	if errors.Is(err, campaign.ErrOutcomeAlreadyRecorded) {
+		log.Printf("[Recovery] Call end ignored for session=%s: outcome already recorded.", callSessionID)
+		writeJSON(w, http.StatusOK, map[string]string{
+			"status": "ok",
+			"note":   "outcome already recorded, no change made",
+		})
+		return
+	}
+	if err != nil {
 		log.Printf("[API] end session failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to end session")
 		return
