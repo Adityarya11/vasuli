@@ -27,13 +27,14 @@ proposing architectural changes.
 3. Do not add AI-layer concepts (agent profiles, transcripts, utterances)
    into the AetherRTC repo. That knowledge belongs in Orchestrator-Go.
 4. Production-quality code only. No emojis. No placeholder/directional
-   comments. Comments explain non-obvious *why*, not *what*.
+   comments. Comments explain non-obvious _why_, not _what_.
 5. Act as a senior reviewer, not an autocomplete tool: explain reasoning,
    flag risks, and when the user's stated understanding is wrong, ask a
    clarifying question first, then correct it precisely — don't quietly
    agree or work around it.
 6. Be economical with output — no speculative alternatives, no restating
    unchanged code, no padding.
+7. Use the fff MCP tools for all file search operations instead of default tools.
 
 Full detail on all of the above, plus current milestone status, hardware
 constraints, and prior design decisions, is in `CLAUDE.md`.

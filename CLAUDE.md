@@ -42,6 +42,7 @@ directly into the orchestrator or inference engine, that's an architectural
 smell — push back on it, or isolate it behind config/profile instead.
 
 Full design records already exist in the repo and remain authoritative:
+
 - `docs/HLD.md`, `docs/LLD.md` — VAR high/low level design
 - `docs/HLD.md`, `docs/LLD.md` (AetherRTC repo) — gateway design
 - `docs/three_tier_architecture.md` — why three tiers, not two; the
@@ -54,7 +55,7 @@ Full design records already exist in the repo and remain authoritative:
   check this before assuming what's done vs. pending
 - `docs/qna.md` — rehearsed technical justifications (gRPC vs REST, Go vs
   Python, race-condition prevention, failure containment) — useful for
-  understanding the *reasoning register* this project is documented in
+  understanding the _reasoning register_ this project is documented in
 
 Do not re-derive decisions that are already justified in these files.
 Read them first. If a new session proposes something that contradicts a
@@ -66,6 +67,7 @@ STT on GPU"), it should flag the conflict and ask, not silently override it.
 ## 2. Current State (verify against `docs/backlog.md` — it may have moved)
 
 **Working, verified end-to-end as of last session:**
+
 - Full three-tier pipeline: real browser mic → WebRTC → AetherRTC →
   Orchestrator-Go → Inference-Python → audible TTS response in browser.
 - VAD-driven utterance boundaries (Silero ONNX, four-state debounce),
@@ -75,10 +77,11 @@ STT on GPU"), it should flag the conflict and ask, not silently override it.
 - Dynamic agent profiling: YAML → `ControlSignal` → LLM system prompt.
 - G.711 encode/decode both directions, verified with real audio.
 - Session state machine (`CREATED → CONNECTING → ACTIVE → PROCESSING →
-  RESPONDING → TERMINATED`), mutex-protected transition map,
+RESPONDING → TERMINATED`), mutex-protected transition map,
   `sync.Once`-guarded `DoneChan`.
 
 **Explicitly open, in priority order (see `docs/backlog.md` for detail):**
+
 1. Milestone 6 — full lifecycle verification: multi-utterance session,
    clean disconnect, no goroutine leaks on either side, single `session_id`
    traceable through all three services' logs.
@@ -102,12 +105,12 @@ assume prior exploratory conversations are committed roadmap.
 
 ## 3. Hardware-Aware Design (don't propose changes that ignore this)
 
-| Stage | Component | Device | Why |
-|---|---|---|---|
-| VAD | Silero VAD (ONNX) | CPU | negligible VRAM cost |
-| STT | Faster-Whisper (int8) | CPU | Ryzen 6-core handles it near-real-time |
-| LLM | qwen2.5:3b via Ollama | GPU | ~2.2GB VRAM, leaves headroom on 4GB card |
-| TTS | Piper | CPU | near-zero latency, no VRAM |
+| Stage | Component             | Device | Why                                      |
+| ----- | --------------------- | ------ | ---------------------------------------- |
+| VAD   | Silero VAD (ONNX)     | CPU    | negligible VRAM cost                     |
+| STT   | Faster-Whisper (int8) | CPU    | Ryzen 6-core handles it near-real-time   |
+| LLM   | qwen2.5:3b via Ollama | GPU    | ~2.2GB VRAM, leaves headroom on 4GB card |
+| TTS   | Piper                 | CPU    | near-zero latency, no VRAM               |
 
 This split is deliberate, not a placeholder. Any suggestion to move STT/TTS
 to GPU, or to swap in a larger LLM, needs to be weighed against the 4GB
@@ -181,6 +184,7 @@ then correct it thoroughly and precisely. Silence or vague hedging in the
 face of a wrong claim is a failure mode here, not politeness.
 
 **Code quality bar:**
+
 - Production-quality only — code that could ship in a real system, not a
   demo shortcut, even for throwaway test harnesses in this repo (see the
   existing `test/` files for the expected bar: real recorded audio over
@@ -190,13 +194,13 @@ face of a wrong claim is a failure mode here, not politeness.
 - No directional/placeholder comments (`// add your logic here`,
   `# TODO: implement`). Either the logic is there, or it's flagged
   explicitly as an open decision with a reason.
-- Comments only earn their place by explaining non-obvious *why*, not
-  restating *what* the code already says, and never in a tone that
+- Comments only earn their place by explaining non-obvious _why_, not
+  restating _what_ the code already says, and never in a tone that
   assumes the reader can't follow the code itself.
 - Match the existing codebase's idioms exactly — e.g. the Go side's
   `logInfo`/`logWarn`/`logFatal` pattern, the Python side's per-module
   `logging.getLogger("InferenceEngine.X")` convention, the transition-map
-  + mutex pattern for state machines. Don't introduce a competing style.
+  - mutex pattern for state machines. Don't introduce a competing style.
 
 **Output economy:** Only produce code once it's actually warranted — this
 account is credit-conscious. Don't generate speculative alternative
@@ -219,3 +223,5 @@ answer in the minimum necessary form.
   committed to the repo (see `.gitignore`).
 - If regenerating protobuf/gRPC code, regenerate independently per repo —
   VAR and AetherRTC deliberately do not share generated bindings.
+
+## 8. Use the fff MCP tools for all file search operations instead of default tools.
