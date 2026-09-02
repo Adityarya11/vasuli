@@ -1,19 +1,28 @@
-"""confirm a short noise burst below `min_speech_duration` never crosses into confirmed speech."""
+"""Confirms a short noise burst below `min_speech_duration` never crosses
+into confirmed speech, i.e. the debounce logic rejects transient noise
+instead of treating it as the start of an utterance.
+"""
 
 import os
 import sys
+
 import numpy as np
-import onnxruntime as ort
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from vad import (
-    VADCommand,
-    VADDetector
-)
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVICE_DIR = os.path.abspath(os.path.join(TEST_DIR, ".."))
 
-VAD_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "silero_vad.onnx")
+if SERVICE_DIR not in sys.path:
+    sys.path.insert(0, SERVICE_DIR)
+
+from vad import VADCommand, VADDetector
+
+VAD_MODEL_PATH = os.path.join(SERVICE_DIR, "models", "silero_vad.onnx")
+
 
 def test_false_start_gauntlet():
+    if not os.path.exists(VAD_MODEL_PATH):
+        raise FileNotFoundError(f"Silero model file not found: {VAD_MODEL_PATH}")
+
     # Initialize detector with default parameters: 250ms speech min, 500ms silence min
     detector = VADDetector(VAD_MODEL_PATH, min_speech_duration=250, min_silence_duration=500)
     
@@ -58,7 +67,7 @@ def test_false_start_gauntlet():
     assert start_speech_count == 0, "VAD bug: START_SPEECH fired for a transient noise below min_speech_duration!"
     assert end_utterance_count == 0, "VAD bug: END_OF_UTTERANCE fired without speech ever being confirmed!"
     assert detector._vad_state.value == "SILENCE", "VAD bug: Detector failed to cycle back to SILENCE state."
-    print("✅ test_vad_false_start PASSED.")
+    print("PASS: test_vad_false_start")
 
 if __name__ == "__main__":
     test_false_start_gauntlet()

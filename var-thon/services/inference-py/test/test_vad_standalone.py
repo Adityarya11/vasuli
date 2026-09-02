@@ -1,9 +1,17 @@
-import numpy as np
-import onnxruntime as ort
-import wave
-import scipy.signal
+"""Standalone smoke check for the raw Silero ONNX model, bypassing
+VADDetector entirely. Runs continuous inference over a real recorded clip
+and prints a visual confidence timeline, for eyeballing that the model
+itself tracks speech/silence correctly before trusting the debounce logic
+built on top of it in vad/detector.py.
+"""
+
 import os
 import time
+import wave
+
+import numpy as np
+import onnxruntime as ort
+import scipy.signal
 
 # ==============================================================================
 # CONFIGURATION
@@ -21,6 +29,9 @@ THRESHOLD = 0.5   # Standard Silero threshold
 # ==============================================================================
 # LOAD MODEL
 # ==============================================================================
+if not os.path.exists(MODEL_PATH):
+    raise FileNotFoundError(f"Silero model file not found: {MODEL_PATH}")
+
 print(f"Loading ONNX model from: {MODEL_PATH}")
 session = ort.InferenceSession(MODEL_PATH)
 
@@ -31,6 +42,9 @@ sr = np.array(TARGET_SR, dtype=np.int64)
 # ==============================================================================
 # LOAD & PREPARE AUDIO
 # ==============================================================================
+if not os.path.exists(TEST_WAV_PATH):
+    raise FileNotFoundError(f"Source WAV not found: {TEST_WAV_PATH}")
+
 print(f"Loading audio from: {TEST_WAV_PATH}")
 with wave.open(TEST_WAV_PATH, 'rb') as wf:
     original_sr = wf.getframerate()

@@ -9,11 +9,17 @@ import wave
 import numpy as np
 import scipy.signal
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVICE_DIR = os.path.abspath(os.path.join(TEST_DIR, ".."))
+REPO_ROOT = os.path.abspath(os.path.join(TEST_DIR, "..", "..", ".."))
+
+if SERVICE_DIR not in sys.path:
+    sys.path.insert(0, SERVICE_DIR)
+
 from vad import VADCommand, VADDetector
 
-VAD_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "silero_vad.onnx")
-SOURCE_WAV = os.path.join(os.path.dirname(__file__), "..", "..", "..", "test_data", "input_1.wav")
+VAD_MODEL_PATH = os.path.join(SERVICE_DIR, "models", "silero_vad.onnx")
+SOURCE_WAV = os.path.join(REPO_ROOT, "test_data", "input_1.wav")
 TARGET_SR = 16000
 FRAME_SIZE = 512
 
@@ -44,6 +50,11 @@ def slice_frames(audio: np.ndarray, start_sec: float, end_sec: float) -> list:
 
 
 def test_rnn_state_persistence():
+    if not os.path.exists(VAD_MODEL_PATH):
+        raise FileNotFoundError(f"Silero model file not found: {VAD_MODEL_PATH}")
+    if not os.path.exists(SOURCE_WAV):
+        raise FileNotFoundError(f"Source WAV not found: {SOURCE_WAV}")
+
     audio = load_and_resample(SOURCE_WAV)
     silence_frames = slice_frames(audio, *SILENCE_REGION_SEC)
     speech_frames = slice_frames(audio, *SPEECH_REGION_SEC)

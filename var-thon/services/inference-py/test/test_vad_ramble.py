@@ -1,13 +1,28 @@
+"""Confirms max_utterance_sec forces an END_OF_UTTERANCE even under
+continuous speech with no silence gap, i.e. the ramble ceiling fires
+independent of the normal silence-based debounce path.
+"""
+
 import os
 import sys
+
 import numpy as np
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
-from vad import VADDetector, VADCommand
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+SERVICE_DIR = os.path.abspath(os.path.join(TEST_DIR, ".."))
 
-VAD_MODEL_PATH = os.path.join(os.path.dirname(__file__), "..", "models", "silero_vad.onnx")
+if SERVICE_DIR not in sys.path:
+    sys.path.insert(0, SERVICE_DIR)
+
+from vad import VADCommand, VADDetector
+
+VAD_MODEL_PATH = os.path.join(SERVICE_DIR, "models", "silero_vad.onnx")
+
 
 def test_ramble_max_ceiling():
+    if not os.path.exists(VAD_MODEL_PATH):
+        raise FileNotFoundError(f"Silero model file not found: {VAD_MODEL_PATH}")
+
     # Configure with a tight max_utterance_sec of 5 seconds to speed up testing
     # 5 seconds @ 16kHz with 512 frame sizes = exactly 156.25 -> 156 frames max ceiling
     max_sec = 5.0
@@ -48,7 +63,7 @@ def test_ramble_max_ceiling():
     # because _utterance_frames appends frames every loop after entry validation.
     assert end_utterance_idx == expected_max_frames - 1, f"Ceiling mismatch! Cutoff fired at loop index {end_utterance_idx}, expected {expected_max_frames - 1}"
         
-    print("✅ test_vad_ramble PASSED.")
+    print("PASS: test_vad_ramble")
 
 if __name__ == "__main__":
     test_ramble_max_ceiling()

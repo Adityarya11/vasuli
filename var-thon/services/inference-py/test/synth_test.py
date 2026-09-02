@@ -1,8 +1,16 @@
+"""Synthetic-pause check: splices two real speech clips together with an
+injected digital silence gap shorter than min_silence_duration, to confirm
+VADDetector treats it as a mid-utterance pause rather than an utterance
+boundary. Complements test_vad.py, which uses a single unmodified
+recording instead of a spliced one.
+"""
+
 import os
 import sys
+
 import numpy as np
-import wave
 import scipy.signal
+import wave
 
 TEST_DIR = os.path.dirname(__file__)
 SERVICE_DIR = os.path.abspath(os.path.join(TEST_DIR, ".."))
@@ -35,6 +43,11 @@ def load_and_resample(path: str) -> np.ndarray:
     ).astype(np.float32)
 
 def main():
+    if not os.path.exists(MODEL_PATH):
+        raise FileNotFoundError(f"Silero model file not found: {MODEL_PATH}")
+    if not os.path.exists(SOURCE_WAV):
+        raise FileNotFoundError(f"Source WAV not found: {SOURCE_WAV}")
+
     audio = load_and_resample(SOURCE_WAV)
     
     chunk_1 = audio[:int(1.5 * TARGET_SR)]
