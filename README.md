@@ -1,51 +1,63 @@
-# Vasuli — AI-Powered Payment Recovery via Voice
+# Vasuli
 
-> **वसूली** _(vasuli)_: the act of collection or recovery in Indian finance and banking.
+> **वसूली** _(vasuli)_: recovery, in the sense an Indian lender means it. Getting the money back.
 
-Vasuli is a distributed, real-time voice agent system that autonomously contacts customers with failed or overdue payments, conducts structured recovery conversations, and executes bounded recovery workflows — measured across a batch, with a full audit trail.
+A voice agent that holds a real conversation with someone about an overdue
+payment, then does something about how it went. If they agree to pay, a
+Razorpay payment link is created before the call is even finished being
+written to the database. If they ask for time, the system waits and calls
+back. If they dispute the debt, it stops calling them, permanently, and
+the account goes to a human.
 
-Built on a custom-engineered voice infrastructure stack (Go + Python, gRPC, WebRTC) and integrated with Razorpay's test-mode APIs, Vasuli closes the loop from `payment.failed` webhook through AI voice negotiation to `payment.captured` confirmation.
+The whole voice pipeline runs on one laptop. Speech recognition, the
+language model, speech synthesis, and the WebRTC transport are all local,
+on an RTX 3050 with 4GB of VRAM. The only outbound network call the system
+makes during a recovery is to Razorpay, to create the link.
 
-**Razorpay Buildathon 2026 — Track 3: AI Revenue Recovery**
-
----
-
-## The Problem
-
-In Indian B2C and BFSI, failed payments create a manual coordination bottleneck that does not scale:
-
-- EMI defaults, subscription lapses, and overdue invoices require outbound customer contact
-- Human recovery agents are expensive, inconsistent in quality, and cannot handle volume
-- SMS and email nudges have low engagement rates and no two-way negotiation capability
-- The window between `payment.failed` and customer contact is filled with latency and dropped cases
-
-The result: recoverable revenue silently leaks. Merchants on Razorpay have no automated, conversational path from a failed payment event to an actual recovered transaction.
-
-Vasuli is that path.
+Submission for the Razorpay AI Buildathon 2026, Track 3: AI Revenue Recovery.
 
 ---
 
-## What Vasuli Does
+## The problem
 
-```
-Razorpay payment.failed webhook
-        ↓
-Recovery Orchestrator creates a session for the customer
-        ↓
-Customer joins a recovery call via browser link
-        ↓
-AI voice agent (Priya) conducts a professional recovery conversation
-        ↓
-Customer agrees → payment link dispatched via Razorpay API
-Customer promises → promise-to-pay date logged with follow-up scheduled
-Customer refuses → stopping rules enforced, no further contact
-        ↓
-payment.captured webhook confirms recovery
-        ↓
-Batch metrics updated: recovered amount, recovery rate, audit trail
-```
+A failed EMI payment is worth chasing. Ten thousand of them are worth
+chasing too, and that is where it falls apart. Human agents cost money and
+have bad days. SMS and email get ignored, and neither can answer "can I pay
+on the fifth instead."
 
-A single campaign can queue 20–100 failed payment accounts. Every contact attempt, conversation outcome, and payment action is logged with timestamps. Stopping rules prevent harassment. The audit trail is queryable.
+So the recoverable money leaks quietly, one dropped follow-up at a time.
+
+## What actually happens on a call
+
+The system picks who to call from a queue it maintains itself. Nobody
+selects the customer.
+
+Priya, the agent, opens the call knowing the name, the amount, the product,
+and the due date. She confirms she is speaking to the right person, states
+what is owed, and asks for payment. Then she listens.
+
+Four things can come out of that conversation, and each one means something
+different to the queue:
+
+| Outcome | What the system does |
+| ------- | -------------------- |
+| Agrees to pay | Creates a real Razorpay payment link, follows up in 24 hours if it goes unpaid |
+| Names a date | Records it and waits until that date |
+| Reaches no conclusion | Tries again after 24 hours |
+| Disputes the debt | Stops calling. Permanently. The account is escalated to a human |
+
+Nobody marks any of this by hand. The outcome is classified from the
+conversation transcript after the call ends, and the queue reschedules
+itself.
+
+Three attempts is the ceiling. After that the account stops being called
+regardless of outcome, because a recovery workflow that never terminates is
+a harassment workflow.
+
+Every step is written to an append-only audit log: who was queued, when
+they were called, what they said, what was created, when payment was
+confirmed. That log is the point. A recovery system nobody can audit is not
+one a merchant can use.
 
 ---
 
@@ -111,6 +123,51 @@ Browser (customer opens recovery link)
 │  Post-call: LLM classifies outcome from full history    │
 └─────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## What this is not
+
+Worth saying before you find it yourself.
+
+**The customer joins the call. The system does not dial them.** Real
+outbound recovery means placing a call over PSTN, and that means a
+telephony provider, a number, a per-minute bill, and DND compliance. None
+of that would change anything about the recovery logic, so it was left out
+and a browser session used instead.
+
+The distinction that matters is narrower than it sounds. The *transport* is
+inbound. The *workflow* is outbound throughout: the system picks who to
+contact from its own queue, the agent speaks first, drives the agenda, and
+decides what happens next. Swapping AetherRTC for a SIP gateway would touch
+nothing downstream, because `gateway.proto` deliberately carries no
+knowledge of agents, transcripts, or customers. It moves audio and a
+session id.
+
+What genuinely would need building for real outbound: assignment inverts
+from pull to push, outcomes like `no_answer` and `busy` start existing,
+something has to decide when and how fast to dial, and TRAI's DND rules
+apply.
+
+**Outcome classification is the weakest component**, and it is the one that
+scales with model size rather than with engineering. A 3B model running in
+4GB of VRAM classifies a four-word answer well and struggles with a whole
+conversation. Measured behaviour: a call ending "thank you" classifies
+correctly three times out of three, while the same call ending "no thanks,
+bye" flips to REFUSED, because the model reads that "no" as refusing the
+payment rather than declining further help. The system degrades safely, as
+no payment link is created on an unclear call, but the limitation is real
+and it is documented in `docs/build-log.md` rather than hidden.
+
+**There is no authentication on any endpoint.** It binds to localhost and
+is meant to. Anyone who can reach port 8090 can create a campaign or record
+an outcome. Adding auth is not interesting work and it was not done.
+
+**One known distributed-systems hole**, described properly in the build
+log: if the Razorpay payment-link call times out *after* Razorpay has
+already created the link, nothing records it and a retry creates a second
+one. The fix is an idempotency key on the request. It was not built,
+because the schedule ran out before the care that change deserves.
 
 ---
 
@@ -193,11 +250,11 @@ The pipeline runs entirely on local hardware. No external API calls during infer
 ### Start order
 
 ```bash
-# Terminal 1 — Inference engine
+# Terminal 1, Inference engine
 cd var-thon/services/inference-py
 uv run python main.py
 
-# Terminal 2 — var-thon Orchestrator-Go (gateway mode)
+# Terminal 2, var-thon Orchestrator-Go (gateway mode)
 cd var-thon/services/orchestrator-go
 go run ./cmd/gateway-server \
   -profile recovery_agent \
@@ -205,7 +262,7 @@ go run ./cmd/gateway-server \
   -inference localhost:50051 \
   -recovery http://localhost:8090
 
-# Terminal 3 — Recovery Orchestrator
+# Terminal 3, Recovery Orchestrator
 cd recovery-orchestrator
 go run ./cmd/main.go \
   -port :8090 \
@@ -213,10 +270,10 @@ go run ./cmd/main.go \
   -razorpay-key-id YOUR_KEY_ID \
   -razorpay-key-secret YOUR_KEY_SECRET
 
-# Terminal 4 — AetherRTC (from its own repo)
+# Terminal 4, AetherRTC (from its own repo)
 go run ./cmd/gateway/main.go
 
-# Browser — open index.html from AetherRTC repo, click Start Call
+# Browser, open index.html from AetherRTC repo, click Start Call
 ```
 
 ### Load a recovery campaign
@@ -282,10 +339,10 @@ Every event logged: webhook received → session assigned → call started → u
 
 ## Docs
 
-- [Architecture](docs/architecture.md) — Full technical design and data flow
-- [Roadmap](docs/roadmap.md) — Milestone plan and build order
-- [Razorpay Integration](docs/razorpay-integration.md) — API reference and webhook handling
-- [Demo Guide](docs/demo.md) — Step-by-step demo walkthrough
+- [Architecture](docs/architecture.md), Full technical design and data flow
+- [Roadmap](docs/roadmap.md), Milestone plan and build order
+- [Razorpay Integration](docs/razorpay-integration.md), API reference and webhook handling
+- [Demo Guide](docs/demo.md), Step-by-step demo walkthrough
 
 ---
 

@@ -1,4 +1,4 @@
-# Vasuli — Setup Guide
+# Vasuli, Setup Guide
 
 ## Repository Structure
 
@@ -107,7 +107,7 @@ AetherRTC requires no configuration changes. It points to `localhost:50052` (var
 2. Switch to **Test Mode** in the Dashboard
 3. Settings → API Keys → Generate Test Key Pair → copy Key ID and Key Secret
 
-That is the entire setup. Test-mode keys require no website and no KYC —
+That is the entire setup. Test-mode keys require no website and no KYC,
 those apply only to live mode, which Vasuli refuses to run against.
 
 **Do not add a webhook in the Dashboard.** That form requires a public
@@ -141,7 +141,7 @@ go run ./cmd -razorpay-key-id rzp_test_OTHER -razorpay-key-secret OTHER
 ```
 
 With no credentials at all the service runs against a stub client that
-fabricates payment links locally — every endpoint including the webhook
+fabricates payment links locally, every endpoint including the webhook
 consumer still works.
 
 ---

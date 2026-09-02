@@ -1,29 +1,29 @@
 # Recovery Orchestrator
 
-The business-logic service in [Vasuli](../README.md) — campaign management,
+The business-logic service in [Vasuli](../README.md), campaign management,
 stopping rules, outcome handling, and the audit trail. This is the only
 service in the system that knows about customers, campaigns, or Razorpay.
 It has no knowledge of voice, WebRTC, or AI inference; that lives entirely
 in [`var-thon`](../var-thon).
 
-> **Status: Active development.** The core service — campaign creation,
+> **Status: Active development.** The core service, campaign creation,
 > queue-based session assignment, outcome handling (AGREED/PROMISED/REFUSED/
-> UNCLEAR), and the audit trail — is built and verified end-to-end. It is
+> UNCLEAR), and the audit trail, is built and verified end-to-end. It is
 > now wired to `var-thon`: a real browser call, routed through the full
 > voice pipeline, spoke a dynamically-assigned customer's name and payment
-> details live. The Razorpay integration is currently a stub, by design —
+> details live. The Razorpay integration is currently a stub, by design,
 > see [Status](#status) below.
 
 ---
 
 ## Why this exists
 
-Vasuli's voice pipeline (`var-thon`) manages a single call's lifecycle —
+Vasuli's voice pipeline (`var-thon`) manages a single call's lifecycle,
 audio in, audio out, one conversation. It has no concept of a *batch* of
 customers, no concept of a payment being overdue, and no concept of what to
 do once a call ends. Recovery Orchestrator is the layer above that: it owns
 the queue of customers to contact, decides which one to hand to the next
-incoming call, and turns a call's outcome into a concrete business action —
+incoming call, and turns a call's outcome into a concrete business action,
 send a payment link, log a promised date, or permanently stop contacting
 someone who refused.
 
@@ -38,7 +38,7 @@ Full system architecture and the reasoning behind this split live in
 ┌─────────────────────────────────────────────────────────────┐
 │                    RECOVERY ORCHESTRATOR                    │
 │                                                               │
-│   api/            HTTP handlers — decode, delegate, encode   │
+│   api/            HTTP handlers, decode, delegate, encode   │
 │     │                                                        │
 │     ▼                                                        │
 │   campaign/        Business rules: stopping rules, outcome   │
@@ -55,14 +55,14 @@ Full system architecture and the reasoning behind this split live in
 Each package has one job and talks to its neighbors through a narrow
 interface:
 
-- **`internal/api`** — HTTP only. Decodes JSON, calls into `campaign`,
+- **`internal/api`**, HTTP only. Decodes JSON, calls into `campaign`,
   encodes the response. No business logic.
-- **`internal/campaign`** — the actual rules: which session gets assigned
+- **`internal/campaign`**, the actual rules: which session gets assigned
   next, what happens when a call ends with a given outcome, how a system
   prompt gets rendered for a customer. Knows nothing about HTTP or SQL.
-- **`internal/store`** — the only package that writes SQL. Typed methods in,
+- **`internal/store`**, the only package that writes SQL. Typed methods in,
   typed structs out; no raw `*sql.DB` leaks past this package.
-- **`internal/razorpay`** — payment-link creation behind a `Client`
+- **`internal/razorpay`**, payment-link creation behind a `Client`
   interface. `StubClient` today; a `LiveClient` making real Razorpay API
   calls arrives once test-mode credentials exist (M6).
 
@@ -76,8 +76,8 @@ go run ./cmd -port :8090 -db ./vasuli.db
 
 | Flag | Env fallback | Default | Meaning |
 | ---- | ------------ | ------- | ------- |
-| `-port` | — | `:8090` | HTTP listen address |
-| `-db` | — | `./vasuli.db` | SQLite database path (created if absent) |
+| `-port` |, | `:8090` | HTTP listen address |
+| `-db` |, | `./vasuli.db` | SQLite database path (created if absent) |
 | `-razorpay-key-id` | `RAZORPAY_KEY_ID` | *(empty)* | Test-mode key ID. Empty uses the stub client |
 | `-razorpay-key-secret` | `RAZORPAY_KEY_SECRET` | *(empty)* | Test-mode key secret |
 | `-razorpay-webhook-secret` | `RAZORPAY_WEBHOOK_SECRET` | *(empty)* | Shared secret inbound webhooks are signed with |
@@ -87,11 +87,11 @@ the working directory is loaded at startup; it is gitignored and must not
 be committed. Each flag's default is read from the environment, so
 precedence needs no merge logic.
 
-On startup, the service applies its schema (idempotent — safe to run
+On startup, the service applies its schema (idempotent, safe to run
 against an existing database) and starts listening.
 
 With no Razorpay credentials it runs fully standalone against
-`StubClient`, which fabricates payment links without any network call —
+`StubClient`, which fabricates payment links without any network call,
 every endpoint including the webhook consumer works in that mode. Supply
 both key flags to switch to the real test-mode API. **Startup refuses any
 key without an `rzp_test_` prefix**: Vasuli generates payment demands
@@ -110,10 +110,10 @@ All request and response bodies are JSON.
 ### `POST /api/v1/campaigns`
 
 Create a campaign and bulk-insert its accounts. Renders a per-customer
-system prompt for each account at creation time — `var-thon` never does
+system prompt for each account at creation time, `var-thon` never does
 template substitution itself.
 
-**Request** — amounts are whole rupees:
+**Request**, amounts are whole rupees:
 
 ```json
 {
@@ -131,11 +131,11 @@ template substitution itself.
 ```
 
 Rupees appear only at this boundary. Internally, and in every call to
-Razorpay, money is an integer count of paise — the smallest unit, which is
+Razorpay, money is an integer count of paise, the smallest unit, which is
 what Razorpay's API expects and what keeps floating point out of currency
 arithmetic.
 
-**Response — `201 Created`**
+**Response, `201 Created`**
 
 ```json
 {
@@ -159,7 +159,7 @@ the given `call_session_id`.
 { "call_session_id": "webrtc_session_001" }
 ```
 
-**Response — `200 OK`**
+**Response, `200 OK`**
 
 ```json
 {
@@ -172,7 +172,7 @@ the given `call_session_id`.
 }
 ```
 
-**Response — `404 Not Found`** — the queue is empty. This is an expected,
+**Response, `404 Not Found`**, the queue is empty. This is an expected,
 non-error condition; `var-thon` falls back to its static agent profile.
 
 ### `POST /api/v1/calls/{call_session_id}/end`
@@ -195,7 +195,7 @@ its consequence.
 | `REFUSED`  | Status → `refused`, permanently excluded from future assignment        |
 | `UNCLEAR`  | Status → `unclear` if attempts remain, else `failed` (stopping rule)   |
 
-**Response — `200 OK`**
+**Response, `200 OK`**
 
 ```json
 { "status": "ok" }
@@ -204,9 +204,9 @@ its consequence.
 ### `GET /api/v1/campaigns/{id}/metrics`
 
 Aggregate counts and amounts for a campaign, computed live from
-`recovery_sessions` — never cached, never hardcoded.
+`recovery_sessions`, never cached, never hardcoded.
 
-**Response — `200 OK`**
+**Response, `200 OK`**
 
 ```json
 {
@@ -257,27 +257,27 @@ them.
 ### `POST /webhooks/razorpay`
 
 Consumes Razorpay webhooks. The raw request body is verified against
-`X-Razorpay-Signature` (HMAC-SHA256) **before** parsing — decoding and
+`X-Razorpay-Signature` (HMAC-SHA256) **before** parsing, decoding and
 re-encoding the JSON changes the bytes and therefore the signature.
 
 | Event | Matched on | Action |
 | ----- | ---------- | ------ |
-| `payment.failed` | — | Creates a session on the most recent active campaign |
+| `payment.failed` |, | Creates a session on the most recent active campaign |
 | `payment.captured` | `razorpay_payment_id` | Marks the original failed payment recovered |
 | `payment_link.paid` | `razorpay_link_id` | Marks a Vasuli-generated link recovered |
-| anything else | — | Acknowledged, no action |
+| anything else |, | Acknowledged, no action |
 
 `payment.captured` and `payment_link.paid` are **not** interchangeable. A
 customer paying a link Vasuli generated produces a *new* payment id with
 no relationship to the failed payment that started recovery, so only the
 link id can resolve it.
 
-**Responses** are chosen for how Razorpay reacts to them — any non-2xx
+**Responses** are chosen for how Razorpay reacts to them, any non-2xx
 triggers retries with backoff:
 
-- `400` — signature verification failed, or malformed payload. Retrying
+- `400`. Signature verification failed, or malformed payload. Retrying
   cannot help.
-- `200` — processed, or acknowledged-and-ignored (unknown session, no
+- `200`. Processed, or acknowledged-and-ignored (unknown session, no
   active campaign, unactionable event type). Prevents infinite redelivery.
 
 All handlers are idempotent; redelivery is the normal case, not an edge
@@ -311,9 +311,9 @@ Three tables, one SQLite file. Full schema in
 [`internal/store/schema.sql`](internal/store/schema.sql).
 
 ```text
-campaigns          — a batch of accounts to contact
-recovery_sessions  — one row per customer per recovery attempt
-audit_log          — append-only event log; the audit trail
+campaigns, a batch of accounts to contact
+recovery_sessions, one row per customer per recovery attempt
+audit_log, append-only event log; the audit trail
 ```
 
 `recovery_sessions.status` lifecycle:
@@ -353,7 +353,7 @@ one connection makes `database/sql` itself serialize access, closing the
 race by configuration rather than hand-rolled locking.
 
 **`razorpay.Client` is an interface with one method.** Not speculative
-abstraction — there are exactly two known implementations (`StubClient` now,
+abstraction. There are exactly two known implementations (`StubClient` now,
 a `LiveClient` once M6 has test-mode credentials), and `campaign.Manager`
 needs to compile and be fully exercisable today without real credentials.
 
@@ -361,11 +361,11 @@ needs to compile and be fully exercisable today without real credentials.
 `localhost`, so demonstrating inbound events needs either a public tunnel
 or locally-signed requests. The verification code is identical in both
 cases, and a tunnel adds an external dependency that can fail during a
-live demo — so the demo signs its own requests with a shared secret.
+live demo. So the demo signs its own requests with a shared secret.
 
 **`payment.failed` with no active campaign is dropped, not stored.** It's
 acknowledged with 200 (so Razorpay stops retrying) and logged. The
-alternative — auto-creating a campaign to own the session — makes campaign
+alternative. Auto-creating a campaign to own the session, makes campaign
 ownership ambiguous, and that ambiguity resurfaces later as metrics that
 reconcile against no batch anyone loaded.
 
@@ -391,18 +391,18 @@ vertical slices rather than strictly sequentially.
 - [x] Razorpay payment-link creation behind a stub (real calls in M6)
 - [x] Verified end-to-end via live HTTP smoke test (not just unit-level)
 - [x] `var-thon` wiring (`internal/recovery/client.go`, per-session profile
-      resolution in `gateway/server.go`) — verified with a real browser call
+      resolution in `gateway/server.go`), verified with a real browser call
       through the full voice pipeline; see `../docs/roadmap.md` M3
 
-- [x] Razorpay webhook consumer (`POST /webhooks/razorpay`) — HMAC-SHA256
+- [x] Razorpay webhook consumer (`POST /webhooks/razorpay`), HMAC-SHA256
       verification, idempotent handling of `payment.failed`,
       `payment.captured`, and `payment_link.paid`
-- [x] `razorpay.LiveClient` — real payment-link creation, selected over the
+- [x] `razorpay.LiveClient`, real payment-link creation, selected over the
       stub when credentials are supplied; startup refuses non-test keys
 - [x] Go unit tests for signature verification, payload parsing, and the
       live client's request shape
 
-- [x] Follow-up scheduling — every outcome decides when the customer may be
+- [x] Follow-up scheduling. Every outcome decides when the customer may be
       contacted again, or that they never may be
 - [x] Queue view showing due / on hold / closed, from the same predicate the
       assigner uses
@@ -412,7 +412,7 @@ vertical slices rather than strictly sequentially.
 - [ ] Outcome signal from Inference-Python back to Orchestrator-Go
 - [ ] Synthetic 20-account batch and a full rehearsal run
 - [ ] Cooldown-based re-queueing (currently `UNCLEAR` either retries once
-      the attempt budget allows or fails permanently — no time-based
+      the attempt budget allows or fails permanently, no time-based
       cooldown window yet; not required for the current demo scope)
 
 ---
@@ -444,4 +444,4 @@ recovery-orchestrator/
 
 ## License
 
-Apache 2.0 — see [`../LICENSE`](../LICENSE).
+Apache 2.0, see [`../LICENSE`](../LICENSE).

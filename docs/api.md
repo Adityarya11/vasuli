@@ -139,7 +139,7 @@ Content-Type: application/json
 {
   "amount": 420000,
   "currency": "INR",
-  "description": "Payment recovery — Bajaj Finance Personal Loan",
+  "description": "Payment recovery, Bajaj Finance Personal Loan",
   "customer": {
     "name": "Rahul Sharma"
   },
@@ -153,7 +153,7 @@ Content-Type: application/json
 ```
 
 - `amount` is in paise (₹4,200 = 420000 paise)
-- `notify.sms` and `notify.email` are false — in the demo, no real SMS/email is sent
+- `notify.sms` and `notify.email` are false, in the demo, no real SMS/email is sent
 - `expire_by` is a Unix timestamp 24 hours from now (so the link doesn't linger indefinitely in test mode)
 
 **Response (relevant fields):**
@@ -227,7 +227,7 @@ You are calling {{.CustomerName}} regarding an outstanding payment of
 Your objectives in order:
 1. Greet {{.CustomerName}} and confirm you are speaking with them.
 2. State the outstanding amount clearly: ₹{{.AmountFormatted}} for {{.ProductName}}.
-3. Offer to help them pay now — you will arrange a payment link.
+3. Offer to help them pay now, you will arrange a payment link.
 4. If they cannot pay now, get a specific date and confirm it back to them.
 5. If they decline, acknowledge respectfully and close.
 
@@ -236,7 +236,7 @@ Rules:
 - Do not mention the payment more than three times if refused.
 - If they agree: say exactly "I will arrange a payment link to be sent
   to your registered number shortly."
-- If they give a date: repeat it back — "So you will pay by [date],
+- If they give a date: repeat it back, "So you will pay by [date],
   I have noted that down."
 - If they refuse: say "I understand, thank you for your time."
 - Keep the call under 3 minutes.
@@ -256,4 +256,4 @@ Rules:
 | Real SMS/email notification      | No (disabled in our payload)                  |
 | Real money transfer              | No                                            |
 
-Everything in the demo uses test-mode throughout. The integration logic (HMAC verification, API calls, event parsing) is identical to what production would require — only the credentials differ.
+Everything in the demo uses test-mode throughout. The integration logic (HMAC verification, API calls, event parsing) is identical to what production would require, only the credentials differ.

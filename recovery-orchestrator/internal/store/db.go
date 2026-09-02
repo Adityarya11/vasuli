@@ -1,5 +1,5 @@
 // Package store is the only place in recovery-orchestrator that talks SQL.
-// Everything here is data access — business rules (stopping rules, outcome
+// Everything here is data access, business rules (stopping rules, outcome
 // handling) live in the campaign package and call these methods.
 package store
 
@@ -8,6 +8,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log"
 	"slices"
 	"time"
 
@@ -48,6 +49,8 @@ func Open(path string) (*DB, error) {
 		return nil, err
 	}
 
+	applyUniqueIndexes(conn)
+
 	return &DB{conn: conn}, nil
 }
 
@@ -79,6 +82,37 @@ func migrate(conn *sql.DB) error {
 	}
 
 	return nil
+}
+
+// uniqueIndexes enforce that a call session, a failed payment, and a
+// generated link each resolve to exactly one recovery session. They are
+// partial because all three columns stay NULL until the relevant event
+// happens, and SQLite treats NULLs as distinct, so a plain UNIQUE would
+// block nothing useful while still permitting duplicate NULLs.
+var uniqueIndexes = []string{
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_sessions_call_session_unique
+	   ON recovery_sessions(call_session_id) WHERE call_session_id IS NOT NULL`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_sessions_payment_unique
+	   ON recovery_sessions(razorpay_payment_id) WHERE razorpay_payment_id IS NOT NULL`,
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_recovery_sessions_link_unique
+	   ON recovery_sessions(razorpay_link_id) WHERE razorpay_link_id IS NOT NULL`,
+}
+
+// applyUniqueIndexes adds the uniqueness guarantees, tolerating databases
+// that already contain duplicates.
+//
+// Failing here is not fatal on purpose. A database written before these
+// constraints existed may hold rows that violate them, and refusing to
+// start is a worse outcome than running without the index: every one of
+// these is a safety net over application logic that already checks the
+// same thing. The warning says which one did not apply so it can be
+// cleaned up deliberately.
+func applyUniqueIndexes(conn *sql.DB) {
+	for _, stmt := range uniqueIndexes {
+		if _, err := conn.Exec(stmt); err != nil {
+			log.Printf("[Recovery] uniqueness constraint not applied, existing rows may conflict: %v", err)
+		}
+	}
 }
 
 func hasColumn(conn *sql.DB, table, column string) (bool, error) {
@@ -157,7 +191,7 @@ type RecoverySession struct {
 	RecoveredAt        sql.NullTime
 
 	// NextEligibleAt is invalid (NULL) when this customer must never be
-	// contacted again — recovered, escalated to a human, or out of attempts.
+	// contacted again. Recovered, escalated to a human, or out of attempts.
 	NextEligibleAt sql.NullTime
 }
 
@@ -220,7 +254,7 @@ const eligibleNow = `
 
 // AssignNextPending atomically claims the longest-waiting eligible session
 // belonging to an active campaign and binds it to callSessionID. Returns
-// nil, nil when nothing is due — callers must distinguish that from an
+// nil, nil when nothing is due, callers must distinguish that from an
 // error and fall back accordingly.
 func (db *DB) AssignNextPending(callSessionID string) (*RecoverySession, error) {
 	tx, err := db.conn.Begin()
@@ -423,7 +457,7 @@ func (db *DB) RecordOutcome(w OutcomeWrite, allowedFrom []string) (bool, error) 
 }
 
 // SetNextEligibleAt reschedules a follow-up. It writes the timestamp and
-// nothing else — it does not check whether the session should ever be
+// nothing else. It does not check whether the session should ever be
 // contacted again, because that judgement belongs to the eligibleNow
 // predicate. A session escalated to a human stays out of the queue even
 // with a timer set, which is what makes hand-editing this column during a
@@ -462,7 +496,7 @@ func (db *DB) MarkRecovered(sessionID string) error {
 }
 
 // InsertAuditLog writes one immutable event row. eventData is marshaled to
-// JSON as-is — pass a map[string]any or a small struct.
+// JSON as-is, pass a map[string]any or a small struct.
 func (db *DB) InsertAuditLog(sessionID, eventType string, eventData any) error {
 	return insertAuditLogTx(db.conn, sessionID, eventType, eventData)
 }
@@ -518,7 +552,7 @@ func (db *DB) AuditEventsForSession(sessionID string) ([]string, error) {
 }
 
 // Queue buckets. A session is due now, waiting for a timer, or finished
-// with — there is no fourth state.
+// with, there is no fourth state.
 const (
 	BucketDueNow = "due_now"
 	BucketOnHold = "on_hold"

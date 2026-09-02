@@ -439,7 +439,7 @@ worth enforcing in code rather than trusting to whoever types the command.
 
 ---
 
-## 2026-09-02 — M7: the queue learns to wait
+## 2026-09-02, M7: the queue learns to wait
 
 ### The half of the workflow that was missing
 
@@ -466,15 +466,15 @@ recorded.
 `razorpay.linkValidity`, the lifetime of a generated payment link. That
 makes the follow-up land exactly when the old link dies, so calling back an
 `AGREED` customer who has not paid is not nagging someone holding a working
-link — the link is gone, and the call exists to issue a new one. The
+link. The link is gone, and the call exists to issue a new one. The
 constant carries a comment saying changing one without the other breaks the
 property.
 
 ### NULL means never, and that direction was chosen deliberately
 
 `next_eligible_at IS NULL` means no further contact: recovered, escalated,
-or out of attempts. The alternative — defaulting to "now" and marking
-terminal states some other way — fails in the dangerous direction. A code
+or out of attempts. The alternative, defaulting to "now" and marking
+terminal states some other way, fails in the dangerous direction. A code
 path that forgets to set the column would contact someone forever. With
 NULL as the default meaning, forgetting leaves a customer uncontacted:
 recoverable, and visible in the queue view as `closed`.
@@ -486,7 +486,7 @@ is redundant when every write path is correct. It is kept because the demo
 edits this column by hand to fast-forward a cooldown, and that `UPDATE`
 touches every row in the table. Without the status check, one hand-edit
 would re-contact a customer who had disputed the debt and been escalated to
-a human — precisely the failure stopping rules exist to prevent.
+a human, which is precisely the failure stopping rules exist to prevent.
 
 Verified live rather than assumed: a blanket
 `UPDATE recovery_sessions SET next_eligible_at = datetime('now','-1 hour')`
@@ -518,7 +518,7 @@ against Piper showed `Rs. 4,200` takes *longer* to speak than
 than read as a word.
 
 The decisive problem was elsewhere. `Rs.` ends in a period, and the LLM
-sentence chunker splits on `[.!?]` past its 8-character minimum — so
+sentence chunker splits on `[.!?]` past its 8-character minimum, so
 `"The amount is Rs."` and `"4,200."` would have become separate TTS chunks,
 putting a pause between the currency and the number. The same defect
 already documented for `Mr.`. Spelling out "rupees" avoids the symbol, the

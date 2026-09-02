@@ -59,7 +59,7 @@ func TestUnclearReturnsToQueueAfterCooldown(t *testing.T) {
 		t.Errorf("returned session %s, want the original %s", returned.ID, sess.ID)
 	}
 	if returned.ContactAttempts != 2 {
-		t.Errorf("ContactAttempts = %d, want 2 — a callback is another attempt", returned.ContactAttempts)
+		t.Errorf("ContactAttempts = %d, want 2, a callback is another attempt", returned.ContactAttempts)
 	}
 }
 
@@ -94,7 +94,7 @@ func TestUnpaidLinkReturnsToQueue(t *testing.T) {
 		t.Fatalf("second agreed: %v", err)
 	}
 	if rzp.calls != 2 {
-		t.Errorf("payment link calls = %d, want 2 — the expired link should be replaced", rzp.calls)
+		t.Errorf("payment link calls = %d, want 2, the expired link should be replaced", rzp.calls)
 	}
 }
 
@@ -146,7 +146,7 @@ func TestEscalatedCustomerNeverReturns(t *testing.T) {
 		t.Error("an escalated customer has a follow-up scheduled")
 	}
 
-	// Even a hand-edited timer must not bring them back — the status check
+	// Even a hand-edited timer must not bring them back, the status check
 	// in the eligibility predicate is the second lock on this door.
 	backdate(t, db, sess.ID)
 

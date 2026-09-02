@@ -43,7 +43,7 @@ class LLMEngine:
         try:
             # keep_alive must match generate_stream's. Ollama applies this per
             # request, so a call without it would reset the model's residency
-            # to the 5-minute default — silently undoing the indefinite hold
+            # to the 5-minute default, silently undoing the indefinite hold
             # that streaming calls establish, and making the next call after a
             # demo pause pay a cold-load penalty.
             response = ollama.chat(

@@ -1,4 +1,4 @@
-# Vasuli — Architecture
+# Vasuli, Architecture
 
 ## Overview
 
@@ -192,7 +192,7 @@ This is the complete sequence from call start to audit record.
 
 ## Proto Contracts
 
-### agent.proto — Orchestrator-Go ↔ Inference-Python
+### agent.proto, Orchestrator-Go ↔ Inference-Python
 
 The AI-aware contract. Carries agent profiles, transcripts, and control signals.
 
@@ -228,7 +228,7 @@ message AgentProfile {
 }
 ```
 
-### gateway.proto — AetherRTC ↔ Orchestrator-Go
+### gateway.proto, AetherRTC ↔ Orchestrator-Go
 
 Transport-only contract. No AI concepts. Carries audio bytes and connection metadata.
 
@@ -318,7 +318,7 @@ CREATE INDEX idx_audit_log_session ON audit_log(session_id);
 
 ## Scheduling and Stopping Rules
 
-A call is never "finished with" a customer — it decides **when, if ever, to
+A call is never "finished with" a customer, it decides **when, if ever, to
 call them again**. That decision is written to `next_eligible_at` at the
 moment the outcome is recorded, and one predicate governs every assignment:
 
@@ -330,12 +330,12 @@ AND status IN ('pending', 'unclear', 'link_sent', 'promised')
 ```
 
 `store.eligibleNow` is that predicate, and both the assignment query and the
-queue view read from it — so the system cannot report someone as due while
+queue view read from it. So the system cannot report someone as due while
 the assigner skips them.
 
 | Outcome | Next contact | Reasoning |
 | ------- | ------------ | --------- |
-| Never called | immediately | — |
+| Never called | immediately |, |
 | `UNCLEAR` | +24h | no verdict reached; worth another attempt |
 | `AGREED`, link unpaid | +24h | the link has expired by then, so a fresh one is needed |
 | `PROMISED` | the promised date, else +24h | the customer set the terms |
@@ -347,7 +347,7 @@ the assigner skips them.
 **The 24-hour cooldown is not an arbitrary constant.** It equals
 `razorpay.linkValidity`, the lifetime of a generated payment link. The
 follow-up therefore lands exactly when the old link dies, so calling back
-is not nagging someone who already holds a working link — it exists to
+is not nagging someone who already holds a working link, it exists to
 issue a new one. Changing one number without the other breaks that.
 
 **`refused` is a handoff, not an abandonment.** A customer disputing the
@@ -374,17 +374,17 @@ classification_messages = [
         "role": "user",
         "content": (
             "Based on the conversation above, what was the customer's final outcome?\n"
-            "AGREED — customer agreed to pay now and wants a payment link\n"
-            "PROMISED — customer committed to a specific future payment date\n"
-            "REFUSED — customer explicitly declined to pay\n"
-            "UNCLEAR — no clear resolution reached\n\n"
+            "AGREED. Customer agreed to pay now and wants a payment link\n"
+            "PROMISED. Customer committed to a specific future payment date\n"
+            "REFUSED, customer explicitly declined to pay\n"
+            "UNCLEAR, no clear resolution reached\n\n"
             "Reply with exactly one word."
         )
     }
 ]
 ```
 
-The result is sent to Recovery Orchestrator in the `POST /api/v1/calls/:id/end` request body. The Recovery Orchestrator makes no inference itself — it receives and stores the outcome.
+The result is sent to Recovery Orchestrator in the `POST /api/v1/calls/:id/end` request body. The Recovery Orchestrator makes no inference itself, it receives and stores the outcome.
 
 ---
 
@@ -396,7 +396,7 @@ AetherRTC generates session IDs. Rather than requiring the Recovery Orchestrator
 
 **Dynamic system prompts, not per-customer YAML files**
 
-Each customer needs a different system prompt (different name, amount, product). The Recovery Orchestrator renders the template at campaign-load time and stores the fully-rendered string in `recovery_sessions.system_prompt`. var-thon receives a plain string — it never does template substitution itself.
+Each customer needs a different system prompt (different name, amount, product). The Recovery Orchestrator renders the template at campaign-load time and stores the fully-rendered string in `recovery_sessions.system_prompt`. var-thon receives a plain string, it never does template substitution itself.
 
 **Post-call LLM classification, not mid-call tool calling**
 

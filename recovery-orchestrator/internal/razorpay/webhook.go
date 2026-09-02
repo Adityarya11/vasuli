@@ -18,7 +18,7 @@ const (
 // of body under secret.
 //
 // body must be the exact bytes received on the wire. Decoding the JSON and
-// re-encoding it changes key order and whitespace, which changes the hash —
+// re-encoding it changes key order and whitespace, which changes the hash,
 // signature verification has to happen before parsing, not after.
 //
 // hmac.Equal is used rather than == so comparison time does not depend on
@@ -93,7 +93,7 @@ func (p PaymentEntity) CustomerName() string {
 
 // DueDate reports the date this payment was attempted, formatted for the
 // system prompt. payment.failed carries no due date of its own, and the
-// attempt date is the closest honest proxy — the amount was payable then
+// attempt date is the closest honest proxy, the amount was payable then
 // and was not paid. Falls back to today only when the event omits a
 // timestamp entirely.
 func (p PaymentEntity) DueDate() string {

@@ -3,7 +3,7 @@ package api
 import "net/http"
 
 // NewRouter builds the HTTP routing table using the standard library's
-// method + path pattern matching (Go 1.22+). No third-party router — four
+// method + path pattern matching (Go 1.22+). No third-party router, four
 // endpoints and a health check don't justify a dependency.
 func NewRouter(h *Handlers) http.Handler {
 	mux := http.NewServeMux()

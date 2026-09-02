@@ -22,7 +22,7 @@ type Handlers struct {
 
 	// webhookSecret is the shared secret inbound Razorpay webhooks are
 	// signed with. Empty means no secret was configured, in which case
-	// every webhook fails verification and is rejected — failing closed,
+	// every webhook fails verification and is rejected, failing closed,
 	// so a misconfigured deployment cannot be driven by unsigned requests.
 	webhookSecret string
 }
@@ -49,7 +49,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 // createAccountRequest takes whole rupees, while everything downstream
 // works in paise. Money is stored and sent as an integer count of the
-// smallest unit — that is what Razorpay's API expects, and it keeps
+// smallest unit. That is what Razorpay's API expects, and it keeps
 // floating point out of currency arithmetic entirely. Rupees appear only
 // here, where a human writes the fixture and 4200 is easier to check than
 // 420000.
@@ -268,7 +268,7 @@ type queueEntryResponse struct {
 }
 
 // CampaignQueue answers "who does the system call next, and who is it
-// deliberately not calling" — the scheduling decisions made visible.
+// deliberately not calling", the scheduling decisions made visible.
 func (h *Handlers) CampaignQueue(w http.ResponseWriter, r *http.Request) {
 	campaignID := r.PathValue("id")
 

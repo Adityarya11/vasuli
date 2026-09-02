@@ -18,7 +18,7 @@ import (
 )
 
 // fallbackOutcome is reported when a call ends without the inference engine
-// delivering a classification — timeout, engine failure, or a call with no
+// delivering a classification, timeout, engine failure, or a call with no
 // conversation at all. UNCLEAR is one of the four outcomes the Recovery
 // Orchestrator already understands, so this degrades cleanly rather than
 // inventing a verdict.
@@ -39,7 +39,7 @@ type Server struct {
 	gatewaypb.UnimplementedGatewayServer
 
 	// Profile is the static fallback persona loaded at startup. It is read
-	// concurrently by every session and never mutated — per-call personas
+	// concurrently by every session and never mutated, per-call personas
 	// are resolved into a local profile inside StreamAudio instead.
 	Profile *config.AgentProfile
 
@@ -74,7 +74,7 @@ func NewServer(profile *config.AgentProfile, inferenceAddr, recoveryURL string) 
 }
 
 // resolveProfile determines which agent persona a session should run with.
-// It reports whether a recovery session was actually assigned — only an
+// It reports whether a recovery session was actually assigned, only an
 // assigned session has a binding on the orchestrator side to close out
 // when the call ends.
 func (s *Server) resolveProfile(sessionID string) (*config.AgentProfile, bool) {
@@ -99,7 +99,7 @@ func (s *Server) resolveProfile(sessionID string) (*config.AgentProfile, bool) {
 
 	// Only the system prompt is per-customer. The agent's own identity
 	// belongs to the YAML profile, so Name and Description are carried
-	// through unchanged — overwriting Name with the customer's name would
+	// through unchanged. Overwriting Name with the customer's name would
 	// make the inference engine log the caller as the agent.
 	return &config.AgentProfile{
 		Name:         s.Profile.Name,
@@ -174,7 +174,7 @@ func (s *Server) StreamAudio(stream gatewaypb.Gateway_StreamAudioServer) error {
 		defer close(outboundDone)
 
 		// On send failure this keeps draining AgentAudioChan instead of
-		// returning. The caller is gone, so the audio has nowhere to go — but
+		// returning. The caller is gone, so the audio has nowhere to go, but
 		// abandoning the channel would let its buffer fill and block the
 		// session's readPump, which still has to receive the classified
 		// outcome before teardown.
@@ -224,8 +224,8 @@ func (s *Server) StreamAudio(stream gatewaypb.Gateway_StreamAudioServer) error {
 		}
 	}()
 
-	// inboundRelayExited records whether the goroutine above — the only
-	// other caller of Send on the inference stream — has stopped. Every
+	// inboundRelayExited records whether the goroutine above, the only
+	// other caller of Send on the inference stream, has stopped. Every
 	// path that publishes to inboundErr does so after its final SendAudio
 	// has returned and immediately before the goroutine exits, so receiving
 	// from that channel proves no further send can be in flight.
@@ -274,7 +274,7 @@ func (s *Server) collectOutcome(sess *session.Session, sessionID string, inbound
 	}
 
 	// Reaching here with the relay still live means the engine ended first
-	// and never classified — so there is nothing a half-close could still
+	// and never classified, so there is nothing a half-close could still
 	// elicit, and attempting one would only risk the race.
 	if !inboundRelayExited {
 		log.Printf("[Gateway] session %s: inference engine ended before classifying, falling back to '%s'.",
@@ -290,7 +290,7 @@ func (s *Server) collectOutcome(sess *session.Session, sessionID string, inbound
 	select {
 	case <-sess.OutcomeChan:
 	case <-sess.DoneChan:
-		// Engine closed its side without classifying — handled below.
+		// Engine closed its side without classifying, handled below.
 	case <-time.After(outcomeTimeout):
 		log.Printf("[Gateway] session %s: timed out after %s waiting for outcome classification.",
 			sessionID, outcomeTimeout)

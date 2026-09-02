@@ -130,7 +130,7 @@ func (s *Session) setOutcome(outcome, promiseDate string) {
 }
 
 // Outcome returns the classified call outcome and promise date. Both are
-// empty if the inference engine never reported one — callers substitute
+// empty if the inference engine never reported one, callers substitute
 // their own default rather than having one invented here.
 func (s *Session) Outcome() (string, string) {
 	s.mu.Lock()
@@ -140,7 +140,7 @@ func (s *Session) Outcome() (string, string) {
 
 // SignalInputComplete half-closes the outbound direction of the inference
 // stream. No further audio will be sent, but the engine keeps its own
-// direction open — which is what lets it deliver the classified outcome
+// direction open, which is what lets it deliver the classified outcome
 // after the caller has already hung up.
 func (s *Session) SignalInputComplete() error {
 	return s.stream.CloseSend()

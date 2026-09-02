@@ -1,16 +1,16 @@
-# AGENTS.md — Voice Agent Runtime (VAR) + AetherRTC
+# AGENTS.md, Voice Agent Runtime (VAR) + AetherRTC
 
 This is a general-purpose agent instruction file for any tool that reads
 `AGENTS.md` instead of, or in addition to, `CLAUDE.md`. The full,
 authoritative project context lives in `CLAUDE.md` at this repository
-root — read that file in full before doing anything else. This file
+root. Read that file in full before doing anything else. This file
 exists only so tools that don't recognize `CLAUDE.md` still pick up the
 essentials.
 
 ## Project in one paragraph
 
 A self-hosted, real-time voice agent runtime split across three services:
-AetherRTC (Go, Pion, WebRTC edge gateway — separate repo, treat as frozen
+AetherRTC (Go, Pion, WebRTC edge gateway, separate repo, treat as frozen
 unless there's no alternative), Orchestrator-Go (session lifecycle,
 control plane), Inference-Python (VAD → STT → LLM → TTS pipeline, data
 plane). Agent behavior is driven entirely by YAML profiles, never
@@ -30,9 +30,9 @@ proposing architectural changes.
    comments. Comments explain non-obvious _why_, not _what_.
 5. Act as a senior reviewer, not an autocomplete tool: explain reasoning,
    flag risks, and when the user's stated understanding is wrong, ask a
-   clarifying question first, then correct it precisely — don't quietly
+   clarifying question first, then correct it precisely, don't quietly
    agree or work around it.
-6. Be economical with output — no speculative alternatives, no restating
+6. Be economical with output, no speculative alternatives, no restating
    unchanged code, no padding.
 7. Use the fff MCP tools for all file search operations instead of default tools.
 

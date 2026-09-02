@@ -1,6 +1,6 @@
 // Package recovery is Orchestrator-Go's client for the Recovery
 // Orchestrator's call-lifecycle API. It is the only place in this service
-// that speaks HTTP — every other boundary is gRPC.
+// that speaks HTTP, every other boundary is gRPC.
 package recovery
 
 import (
@@ -28,7 +28,7 @@ const requestTimeout = 3 * time.Second
 var ErrNoPendingSession = errors.New("recovery: no pending session available")
 
 // SessionContext is the per-customer call context returned by
-// POST /api/v1/calls/assign. SystemPrompt arrives fully rendered — this
+// POST /api/v1/calls/assign. SystemPrompt arrives fully rendered, this
 // service never performs template substitution.
 type SessionContext struct {
 	SessionID              string `json:"session_id"`
@@ -105,7 +105,7 @@ func (c *Client) doPost(path string, payload, out any) (int, error) {
 	// The request context is derived from Background rather than from the
 	// caller's gRPC stream context on purpose. EndSession runs precisely
 	// while that stream is tearing down, and inheriting an already-cancelled
-	// context would abort the HTTP call before it left the process — the
+	// context would abort the HTTP call before it left the process, the
 	// call outcome would never reach the audit trail.
 	ctx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()

@@ -279,7 +279,7 @@ class VoiceAgentServicer(agent_pb2_grpc.VoiceAgentServicer):
         if control.profile.system_prompt:
             ctx.system_prompt = control.profile.system_prompt
             logger.info(
-                f"[{ctx.session_id}] Profile received — agent: '{control.profile.agent_name}'"
+                f"[{ctx.session_id}] Profile received, agent: '{control.profile.agent_name}'"
             )
 
         if control.type != agent_pb2.ControlSignal.END_OF_UTTERANCE:
@@ -346,7 +346,7 @@ class VoiceAgentServicer(agent_pb2_grpc.VoiceAgentServicer):
             # disconnects is deliberately discarded, not flushed into
             # classification: a mid-word fragment transcribes poorly and
             # would add STT latency to teardown. Logged rather than dropped
-            # silently, because it is the one path that can cost an outcome —
+            # silently, because it is the one path that can cost an outcome,
             # a customer who agrees and hangs up inside VAD's silence
             # threshold leaves that agreement here, unclassified.
             pending = vad.get_utterance_frames()

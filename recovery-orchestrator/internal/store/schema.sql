@@ -64,5 +64,13 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_recovery_sessions_status ON recovery_sessions(status);
 CREATE INDEX IF NOT EXISTS idx_recovery_sessions_campaign ON recovery_sessions(campaign_id);
-CREATE INDEX IF NOT EXISTS idx_recovery_sessions_call_session ON recovery_sessions(call_session_id);
 CREATE INDEX IF NOT EXISTS idx_audit_log_session ON audit_log(session_id);
+
+-- Sorted and filtered on by every assignment, so it carries the hot query.
+CREATE INDEX IF NOT EXISTS idx_recovery_sessions_next_eligible
+    ON recovery_sessions(next_eligible_at);
+
+-- The three uniqueness constraints are created in store.migrate rather than
+-- here. They can legitimately fail against a database that already holds
+-- duplicates, and a startup that refuses to run is worse than a missing
+-- index, so that path warns and continues instead of aborting.

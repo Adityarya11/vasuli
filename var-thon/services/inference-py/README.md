@@ -1,4 +1,4 @@
-# Inference Engine — Python
+# Inference Engine, Python
 
 The inference service is the AI backbone of the voice runtime. It receives
 audio from the orchestrator over a gRPC bidirectional stream, runs it through
@@ -11,11 +11,11 @@ a three-stage pipeline, and streams synthesized audio back.
 ```text
 Audio Chunks (gRPC)
         ↓
-Speech to Text — Faster-Whisper (CPU, int8)
+Speech to Text, Faster-Whisper (CPU, int8)
         ↓
-Language Model — qwen2.5:3b via Ollama (GPU)
+Language Model, qwen2.5:3b via Ollama (GPU)
         ↓
-Text to Speech — Piper TTS (CPU)
+Text to Speech, Piper TTS (CPU)
         ↓
 Audio Chunks (gRPC)
 ```

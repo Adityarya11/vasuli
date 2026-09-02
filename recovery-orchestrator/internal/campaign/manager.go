@@ -1,7 +1,7 @@
 // Package campaign holds the business rules recovery-orchestrator exists
 // for: rendering per-customer system prompts, applying stopping rules when
 // assigning the next call, and recording what happened when a call ends.
-// It knows nothing about HTTP or SQL directly — both are injected.
+// It knows nothing about HTTP or SQL directly, both are injected.
 package campaign
 
 import (
@@ -20,7 +20,7 @@ import (
 )
 
 // ErrNoActiveCampaign reports an inbound payment.failed with no campaign to
-// attach it to. Acknowledged and dropped rather than rejected — see
+// attach it to. Acknowledged and dropped rather than rejected, see
 // HandlePaymentFailed.
 var ErrNoActiveCampaign = errors.New("campaign: no active campaign to attach this payment to")
 
@@ -29,7 +29,7 @@ var ErrNoActiveCampaign = errors.New("campaign: no active campaign to attach thi
 //
 // The constraints here are shaped by how the output is consumed. Every word
 // is synthesized and played down a phone line, and the caller's microphone
-// is gated at the edge for the whole of that playback — so a long reply does
+// is gated at the edge for the whole of that playback, so a long reply does
 // not merely ramble, it locks the customer out of the conversation for as
 // many seconds as it takes to speak. Hence the per-turn word limit and the
 // one-question rule, which replaced a numbered objective list that invited
@@ -142,7 +142,7 @@ func (m *Manager) renderSystemPrompt(acc store.Account) (string, error) {
 }
 
 // AssignSession pops the next eligible pending session and binds it to
-// callSessionID. Returns nil, nil when the queue is empty — this is the
+// callSessionID. Returns nil, nil when the queue is empty, this is the
 // expected "no work available" case, not an error; var-thon falls back to
 // its static profile when it sees this.
 func (m *Manager) AssignSession(callSessionID string) (*store.RecoverySession, error) {
@@ -177,7 +177,7 @@ const (
 // recording AGREED twice would create a second payment link and duplicate
 // the audit trail. More importantly, without it a session already marked
 // refused could be dragged back into link_sent by a stray or replayed
-// call — re-engaging a customer who declined, which is exactly what the
+// call. Re-engaging a customer who declined, which is exactly what the
 // stopping rules exist to prevent.
 //
 // unclear is included deliberately: it means the classifier reached no
@@ -189,7 +189,7 @@ const (
 // It is 24 hours because that is exactly how long a generated payment link
 // lives (see razorpay.linkValidity). By the time the cooldown expires the
 // old link is dead at Razorpay's end, so the follow-up call is not chasing
-// someone who already has a working link — it exists to issue a new one.
+// someone who already has a working link, it exists to issue a new one.
 // Changing one of these two numbers without the other breaks that property.
 const followUpCooldown = 24 * time.Hour
 
@@ -206,7 +206,7 @@ var endSessionAllowedFrom = map[string]bool{
 var ErrOutcomeAlreadyRecorded = errors.New("campaign: session outcome is already recorded")
 
 // EndSession records the outcome of a completed call and applies the
-// consequence for that outcome — payment link creation for AGREED, a
+// consequence for that outcome, payment link creation for AGREED, a
 // promise date for PROMISED, a permanent stop for REFUSED, and either a
 // retry-eligible or exhausted state for UNCLEAR.
 //
@@ -234,7 +234,7 @@ func (m *Manager) EndSession(ctx context.Context, callSessionID, outcome, promis
 	if outcome == OutcomeAgreed {
 		link, err = m.razorpay.CreatePaymentLink(ctx, razorpay.PaymentLinkRequest{
 			AmountPaise:  sess.OutstandingPaise,
-			Description:  "Payment recovery — " + sess.ProductName,
+			Description:  "Payment recovery, " + sess.ProductName,
 			CustomerName: sess.CustomerName,
 		})
 		if err != nil {
@@ -259,7 +259,7 @@ func (m *Manager) EndSession(ctx context.Context, callSessionID, outcome, promis
 
 // buildOutcomeWrite maps an outcome to the status and audit events it
 // produces. Assembling the whole change first is what lets it be applied
-// atomically — the status and the audit rows explaining it commit together
+// atomically. The status and the audit rows explaining it commit together
 // or not at all.
 func (m *Manager) buildOutcomeWrite(
 	sess *store.RecoverySession,
@@ -279,7 +279,7 @@ func (m *Manager) buildOutcomeWrite(
 	switch outcome {
 	case OutcomeAgreed:
 		// A link was sent but nothing is paid yet. The follow-up lands once
-		// the link has expired, so calling back is not nagging — the
+		// the link has expired, so calling back is not nagging, the
 		// customer genuinely needs a fresh one. Payment confirmation clears
 		// this timer; see store.MarkRecovered.
 		write.Status = store.StatusLinkSent
@@ -359,14 +359,14 @@ func promisedFollowUp(promiseDate string, fallback time.Time) *time.Time {
 // ErrSessionNotFound reports a webhook that refers to a session this system
 // has no record of. Webhook delivery is not scoped to one merchant
 // integration, so unrelated events are an ordinary occurrence, not a
-// failure — callers acknowledge them rather than returning an error status
+// failure. Callers acknowledge them rather than returning an error status
 // that would make Razorpay retry forever.
 var ErrSessionNotFound = errors.New("campaign: no recovery session matches this event")
 
 // HandlePaymentCaptured confirms recovery from a payment.captured event,
 // matching on the original failed payment's id.
 //
-// Note this only resolves payments against that original id — the demo's
+// Note this only resolves payments against that original id, the demo's
 // simulated capture. A customer paying a link Vasuli generated produces a
 // different payment id entirely; that path is HandlePaymentLinkPaid.
 // Idempotent: a repeat capture for an already-recovered session is a no-op.
@@ -512,7 +512,7 @@ func randomID(prefix string) (string, error) {
 // formatDueDate turns a stored ISO date into something a speech synthesizer
 // reads correctly. Piper pronounces "2026-08-15" as digits and dashes;
 // "15 August 2026" is pronounced as a date. Input that is not an ISO date
-// passes through untouched — the field is caller-supplied, and a malformed
+// passes through untouched, the field is caller-supplied, and a malformed
 // date should not fail campaign creation.
 func formatDueDate(due string) string {
 	parsed, err := time.Parse("2006-01-02", due)
@@ -524,7 +524,7 @@ func formatDueDate(due string) string {
 
 // formatRupees converts paise to a comma-grouped rupee string (e.g.
 // 420000 -> "4,200"). Grouping is plain 3-digit (not Indian lakh/crore
-// style) — the demo's amount range (₹2,000-₹25,000) never crosses the
+// style). The demo's amount range (₹2,000-₹25,000) never crosses the
 // point where the two styles diverge, so the simpler implementation is
 // correct for every value this system actually produces.
 func formatRupees(paise int64) string {

@@ -1,4 +1,4 @@
-# Vasuli — Demo Runbook
+# Vasuli, Demo Runbook
 
 The complete cycle, top to bottom: voice call → outcome classification →
 payment link → webhook → recovered, with the audit trail proving each step.
@@ -29,7 +29,7 @@ working directory, so Terminal 1 must start from
 this server and the `curl` in Step 5, and Razorpay never sees it.
 
 > **Do not create a webhook in the Razorpay dashboard.** That form demands a
-> public HTTPS URL, which would mean hosting or a tunnel — an external
+> public HTTPS URL, which would mean hosting or a tunnel, an external
 > dependency that can fail mid-demo. Vasuli signs its own webhook requests
 > locally, and the verification code exercised is byte-identical to what a
 > real delivery would hit. Only the API keys come from Razorpay.
@@ -54,7 +54,7 @@ Remove-Item vasuli.db -ErrorAction SilentlyContinue
 
 ---
 
-## Terminal 1 — Recovery Orchestrator
+## Terminal 1, Recovery Orchestrator
 
 ```powershell
 cd E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator
@@ -70,13 +70,13 @@ Recovery Orchestrator listening on :8090 (db: ./vasuli.db, razorpay: live (test 
 | Startup says                     | Meaning                                                                                |
 | -------------------------------- | -------------------------------------------------------------------------------------- |
 | `live (test mode)`               | Real Razorpay API. Payment links are genuine and appear in your dashboard              |
-| `stub (no credentials supplied)` | `.env` not found — you are in the wrong directory. Links will be fake `plink_stub_...` |
+| `stub (no credentials supplied)` | `.env` not found, you are in the wrong directory. Links will be fake `plink_stub_...` |
 | refuses to start                 | The key is not `rzp_test_`. Vasuli will not run against live credentials               |
 
 A `No -razorpay-webhook-secret set` warning means Step 5 will reject every
 webhook.
 
-## Terminal 2 — Inference engine
+## Terminal 2, Inference engine
 
 ```powershell
 cd E:\APPLICATIONS\CODING\project\vasuli\var-thon\services\inference-py
@@ -86,7 +86,7 @@ uv run python main.py
 
 Wait for: `Inference Engine running on port :50051`
 
-## Terminal 3 — Orchestrator-Go gateway
+## Terminal 3, Orchestrator-Go gateway
 
 ```powershell
 cd E:\APPLICATIONS\CODING\project\vasuli\var-thon\services\orchestrator-go
@@ -97,7 +97,7 @@ Confirm it says **`profile: Priya`**. If it says `Sarah the Receptionist`,
 the wrong profile is loaded and the fallback persona is a dental
 receptionist.
 
-## Terminal 4 — AetherRTC
+## Terminal 4, AetherRTC
 
 ```powershell
 cd E:\APPLICATIONS\CODING\project\AetherRTC
@@ -109,7 +109,7 @@ Wait for: `Listening on ws://localhost:8080/ws`
 
 ---
 
-## Step 0 — Preflight
+## Step 0, Preflight
 
 Two seconds, and it catches the single most common failure: a service that
 exited without anyone noticing, leaving stale scrollback in a terminal that
@@ -123,11 +123,11 @@ foreach ($p in 8090,50051,50052,8080,11434) {
 ```
 
 All five must read `UP`. If the browser connects but **nothing at all
-happens**, this is almost always why — that symptom means a service is
+happens**, this is almost always why, that symptom means a service is
 down, and is different from "one exchange then silence", which means you
 spoke too early (see Step 2).
 
-## Step 1 — Load the campaign
+## Step 1, Load the campaign
 
 ```powershell
 cd E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator
@@ -138,14 +138,14 @@ Use `m3_smoke_test.json` instead for a single-account run.
 
 Amounts in the fixture are **whole rupees** (`"outstanding_rupees": 4200`).
 They are stored and sent to Razorpay as paise, because money belongs in an
-integer count of the smallest unit — the conversion happens once, at the
+integer count of the smallest unit, the conversion happens once, at the
 API boundary.
 
 ```json
 {"campaign_id":"camp_...","name":"M3 Smoke Test","total":1,"status":"active",...}
 ```
 
-Note the `campaign_id` — Step 6 needs it.
+Note the `campaign_id`, Step 6 needs it.
 
 `curl: option -d: error encountered when reading a file` means you are not
 in `recovery-orchestrator/`; the `@` path is relative.
@@ -155,7 +155,7 @@ leaves the queue empty, at which point the agent falls back to the static
 profile and never mentions the customer. If a call comes through
 generically, re-run this command.
 
-## Step 1b — Show who the system decided to call
+## Step 1b, Show who the system decided to call
 
 ```powershell
 curl.exe -s http://localhost:8090/api/v1/campaigns/camp_XXXXXXXX/queue
@@ -176,7 +176,7 @@ customer**, before any call exists. Worth showing before the call rather
 than after, because it is what makes the workflow outbound-shaped even
 though the transport is a browser session the customer joins.
 
-## Step 2 — The live call
+## Step 2, The live call
 
 Open `E:\APPLICATIONS\CODING\project\AetherRTC\index.html`, click
 **Start Call**, allow the microphone, wait for
@@ -185,31 +185,31 @@ Open `E:\APPLICATIONS\CODING\project\AetherRTC\index.html`, click
 **The single most important rule: wait for Priya to finish speaking before
 you talk.** The microphone is gated at the edge for the entire duration of
 her audio playback, so anything said over her is discarded before it
-reaches the pipeline — indistinguishable from the system being broken.
+reaches the pipeline. Indistinguishable from the system being broken.
 
 Do not use the logs for timing. Terminal 2 prints
 `Utterance response complete. 9.15s of audio queued; caller audio is gated
-at the edge until playback ends` — synthesis finishes _seconds before_
+at the edge until playback ends`, synthesis finishes _seconds before_
 playback does. That number is how long you must wait. **Go by your ears,
 then leave a beat.**
 
-Replies run long — 15–30s of audio is normal, which is a known limitation
+Replies run long, 15–30s of audio is normal, which is a known limitation
 of the 3B model (see `docs/build-log.md`). Budget roughly three exchanges
 per minute and keep your own answers short.
 
 A conversation that reaches the AGREED path:
 
-1. "Hello." — wait
-2. "Yes, you are speaking with Rahul Sharma." — wait
-3. **"Please give me the payment link."** — wait for her confirmation
-4. Optionally "Thank you." — wait
+1. "Hello.", wait
+2. "Yes, you are speaking with Rahul Sharma.", wait
+3. **"Please give me the payment link."**, wait for her confirmation
+4. Optionally "Thank you.", wait
 5. Pause ~2 seconds of silence so VAD closes the utterance
 6. Click **End Call**
 
 Two things matter here, both measured:
 
 **Never end with a phrase containing "no".** "No thanks, bye" classifies
-the whole call as `REFUSED` — three times out of three — even after a clear
+the whole call as `REFUSED`, three times out of three, even after a clear
 agreement, because the classifier reads that "no" as refusing the payment.
 "Thank you." classifies `AGREED` three times out of three. Close politely
 or simply stop talking.
@@ -231,7 +231,7 @@ Terminal 3:
 [Gateway] session session_...: reported outcome 'AGREED' to recovery orchestrator.
 ```
 
-## Step 3 — Audit trail
+## Step 3, Audit trail
 
 ```powershell
 sqlite3 -header -column E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator\vasuli.db "SELECT event_type, event_data FROM audit_log ORDER BY id;"
@@ -248,7 +248,7 @@ payment_link_sent   {"amount_paise":420000,"razorpay_link_id":"plink_...",...}
 Every event timestamped, from queueing through the spoken conversation to
 the payment link.
 
-## Step 4 — Session state
+## Step 4, Session state
 
 ```powershell
 sqlite3 -header -column E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator\vasuli.db "SELECT customer_name, status, razorpay_link_id FROM recovery_sessions;"
@@ -261,9 +261,9 @@ makes it `recovered`.
 
 If `razorpay_link_id` starts `plink_stub_`, Terminal 1 was in stub mode. A
 genuine link is `plink_` with no `_stub_`, and **opens as a real payment
-page** — worth showing judges alongside the Razorpay dashboard.
+page**. Worth showing judges alongside the Razorpay dashboard.
 
-## Step 5 — Confirm payment via webhook
+## Step 5, Confirm payment via webhook
 
 **Git Bash** (needs `openssl`). Absolute DB path and an empty-link guard,
 because both have bitten this runbook before:
@@ -291,7 +291,7 @@ from formatted text can carry a Unicode en-dash that looks identical to a
 hyphen and produces `command not found`. When that happened, `cd` silently
 failed, `sqlite3` opened an empty database in the home directory, `LINK`
 came back empty, and the server correctly reported
-`payment_link.paid for unknown link  - acknowledged, no action` — note the
+`payment_link.paid for unknown link  - acknowledged, no action`, note the
 blank where the id should be. That blank is the tell.
 
 Terminal 1 on success:
@@ -303,10 +303,10 @@ Status is now `recovered` with a timestamp.
 `pay_demo_capture_1`, appears nowhere in the database. A customer paying a
 generated link creates a _new_ payment unrelated to the failed one that
 started recovery, so the session resolves by **payment link id**, not
-payment id. Matching on payment id — the obvious-looking choice — would
+payment id. Matching on payment id, the obvious-looking choice, would
 silently resolve nothing.
 
-## Step 6 — Metrics
+## Step 6, Metrics
 
 ```powershell
 curl.exe -s http://localhost:8090/api/v1/campaigns/camp_XXXXXXXX/metrics
@@ -325,7 +325,7 @@ returns `campaign not found`.
 
 ---
 
-## Step 7 — Follow-up scheduling, and fast-forwarding the clock
+## Step 7, Follow-up scheduling, and fast-forwarding the clock
 
 This is the part that makes it an orchestration rather than a call script.
 Every outcome decides **when the customer may be contacted again**:
@@ -350,10 +350,10 @@ curl.exe -s http://localhost:8090/api/v1/campaigns/camp_XXXXXXXX/queue
 | Outcome | Next contact |
 | ------- | ------------ |
 | `UNCLEAR` | +24h |
-| `AGREED`, link unpaid | +24h — *exactly when the link expires* |
+| `AGREED`, link unpaid | +24h, *exactly when the link expires* |
 | `PROMISED` | the promised date, else +24h |
-| `REFUSED` | never — escalated to a human |
-| Payment confirmed | never — the follow-up is cancelled |
+| `REFUSED` | never, escalated to a human |
+| Payment confirmed | never, the follow-up is cancelled |
 | 3 attempts used | never |
 
 **Fast-forwarding, on camera.** A 24-hour cooldown cannot be waited out in
@@ -368,7 +368,7 @@ sqlite3 /e/APPLICATIONS/CODING/project/vasuli/recovery-orchestrator/vasuli.db \
 ```
 
 Re-check the queue: everyone on hold is now `due_now`, with `attempt`
-incremented. This is honest — no outcome is fabricated, only a timestamp
+incremented. This is honest, no outcome is fabricated, only a timestamp
 moved, and the audit trail still shows exactly what really happened.
 
 **Worth saying while you do it:** that `UPDATE` deliberately touches every
@@ -415,7 +415,7 @@ Step 0. Terminals can show stale scrollback after a process exits.
 **Nothing detected after the first exchange.** You spoke while Priya's
 audio was still playing. Wait for her to finish, then leave a beat.
 
-**Priya uses a generic greeting, no customer name.** Queue was empty —
+**Priya uses a generic greeting, no customer name.** Queue was empty,
 Terminal 3 says `recovery queue empty, using static profile 'Priya'`.
 Re-run Step 1.
 
@@ -423,7 +423,7 @@ Re-run Step 1.
 `-profile receptionist`. Restart with `-profile recovery_agent`.
 
 **Outcome is REFUSED or UNCLEAR after a clear agreement.** Almost always
-the closing phrase — see Step 2. A final turn containing "no" (as in "no
+the closing phrase, see Step 2. A final turn containing "no" (as in "no
 thanks") flips the classification to `REFUSED`. The system degrades safely:
 no payment link is created on a call that was not clearly an agreement.
 Manual override:
@@ -435,7 +435,7 @@ curl -s -X POST http://localhost:8090/api/v1/calls/<call_session_id>/end -H "Con
 **Webhook returns 400.** The secret in your shell does not match
 `RAZORPAY_WEBHOOK_SECRET`, or the body changed after signing.
 
-**Webhook says `unknown link` with a blank id.** `LINK` resolved empty —
+**Webhook says `unknown link` with a blank id.** `LINK` resolved empty,
 wrong DB path, or no AGREED call yet. The guard in Step 5 catches this.
 
 **Payment link creation fails.** Terminal 1 carries Razorpay's own error

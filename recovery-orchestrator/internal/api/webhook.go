@@ -21,7 +21,7 @@ const maxWebhookBody = 1 << 20 // 1 MiB
 //
 // Response codes here are chosen for how Razorpay reacts to them, not just
 // for correctness: any non-2xx makes Razorpay retry with backoff. A genuine
-// signature failure is worth rejecting (400 — retrying will not help), but
+// signature failure is worth rejecting (400, retrying will not help), but
 // an event about a session this system does not own must be acknowledged
 // with 200, or Razorpay will redeliver it indefinitely.
 func (h *Handlers) RazorpayWebhook(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +49,7 @@ func (h *Handlers) RazorpayWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// A nil error means the event reached a terminal decision, including
 	// benign ones like an unknown session. A non-nil error means processing
-	// failed for a reason a retry could fix — a database write that did not
+	// failed for a reason a retry could fix, a database write that did not
 	// land, say. Those two must not share a status code: acknowledging an
 	// infrastructure failure with 200 tells Razorpay never to resend it, and
 	// the recovery is lost with no way to recover it.

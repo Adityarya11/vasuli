@@ -13,8 +13,8 @@ import (
 
 // countingRazorpay records how many payment links were requested. Several
 // tests assert on that count rather than on stored state, because the
-// damage from a non-idempotent EndSession is the second API call itself —
-// a real payment demand — not the database row it leaves behind.
+// damage from a non-idempotent EndSession is the second API call itself,
+// a real payment demand, not the database row it leaves behind.
 type countingRazorpay struct {
 	calls int
 	err   error
@@ -213,7 +213,7 @@ func TestEndSessionIsIdempotent(t *testing.T) {
 	}
 
 	if rzp.calls != 1 {
-		t.Errorf("payment link calls = %d, want 1 — a duplicate end created a second link", rzp.calls)
+		t.Errorf("payment link calls = %d, want 1, a duplicate end created a second link", rzp.calls)
 	}
 	if n := countAudit(t, db, sess.ID, "call_ended"); n != 1 {
 		t.Errorf("call_ended audit rows = %d, want 1", n)

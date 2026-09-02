@@ -4,7 +4,7 @@
 // there are exactly two concrete implementations on the roadmap (Stub now,
 // Live once test-mode credentials exist in M6), campaign.Manager must
 // compile and be testable today without real credentials, and the seam
-// between them is exactly one method wide. That is a narrow, known need —
+// between them is exactly one method wide. That is a narrow, known need,
 // not a guess at future requirements.
 package razorpay
 

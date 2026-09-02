@@ -17,7 +17,7 @@ const (
 
 	// requestTimeout bounds a payment-link call. This runs during call
 	// teardown, after the customer has already hung up, so a slow Razorpay
-	// response delays the audit record rather than the caller — but it must
+	// response delays the audit record rather than the caller, but it must
 	// still be bounded so teardown cannot hang indefinitely.
 	requestTimeout = 10 * time.Second
 

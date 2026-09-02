@@ -1,7 +1,7 @@
 ### 1. "Why gRPC over REST?"
 
 **The Answer:**
-"For a real-time voice agent, REST is fundamentally the wrong paradigm. REST is stateless and heavily relies on the Request-Response lifecycle. If I used REST, I would be forced into a 'batching' architecture—waiting for the user to finish speaking, sending a massive audio payload, and waiting for a massive response.
+"For a real-time voice agent, REST is fundamentally the wrong paradigm. REST is stateless and heavily relies on the Request-Response lifecycle. If I used REST, I would be forced into a 'batching' architecture-waiting for the user to finish speaking, sending a massive audio payload, and waiting for a massive response.
 
 I chose gRPC specifically for its **native bidirectional streaming** over HTTP/2. It allows the Go orchestrator and the Python inference engine to maintain a persistent, open connection. I can stream user audio chunks up to Python while simultaneously streaming synthesized AI audio bytes down to Go. Furthermore, using Protocol Buffers allowed me to define a strict, strongly-typed contract (the `Event` proto with a `oneof` payload). This eliminates the serialization overhead of JSON and guarantees that the Go control plane and Python data plane never misinterpret payload boundaries, which is critical when piping raw byte buffers."
 

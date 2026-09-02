@@ -1,4 +1,4 @@
-# CLAUDE.md — Voice Agent Runtime (VAR) + AetherRTC
+# CLAUDE.md, Voice Agent Runtime (VAR) + AetherRTC
 
 This file is read automatically by Claude Code at the start of every session
 in this repository. It exists so a fresh session has the same context, tone,
@@ -18,16 +18,16 @@ Browser <--WebRTC--> AetherRTC <--gRPC--> Orchestrator-Go <--gRPC--> Inference-P
          (Pion)              (gateway.proto)              (agent.proto)
 ```
 
-- **AetherRTC** (`atherRTC`, separate repo) — Edge media gateway. Go + Pion.
-  Terminates WebRTC, forces G.711/PCMU codec (not Opus — deliberate, avoids
+- **AetherRTC** (`atherRTC`, separate repo), Edge media gateway. Go + Pion.
+  Terminates WebRTC, forces G.711/PCMU codec (not Opus, deliberate, avoids
   CGO), decodes to PCM, bridges to the orchestrator over its own gRPC
   contract. Knows nothing about AI, utterances, or agent profiles. This
-  repo is intentionally frozen — treat changes to it as a last resort, not
+  repo is intentionally frozen, treat changes to it as a last resort, not
   a first instinct (see Section 5).
-- **Orchestrator-Go** (`services/orchestrator-go` in the main repo) —
+- **Orchestrator-Go** (`services/orchestrator-go` in the main repo),
   Control plane. Owns session lifecycle via a strict state machine, bridges
   the two gRPC contracts, never performs inference.
-- **Inference-Python** (`services/inference-py` in the main repo) — Data
+- **Inference-Python** (`services/inference-py` in the main repo), Data
   plane. VAD (Silero, ONNX) → STT (Faster-Whisper, CPU, int8) → LLM
   (Qwen2.5:3b via Ollama, GPU) → TTS (Piper, CPU). Never manages call
   lifecycle.
@@ -36,25 +36,25 @@ The system is designed as **runtime infrastructure**, not a single-purpose
 app. Agent personality is 100% driven by YAML profiles in
 `configs/agent_profiles/`. The same pipeline should be able to run a dental
 receptionist or a real estate consultant without touching orchestration or
-inference code — only the profile changes. If a change request would embed
+inference code, only the profile changes. If a change request would embed
 domain logic (e.g. `PropertyLookupModule`, `RecoveryOrchestratorHook`)
 directly into the orchestrator or inference engine, that's an architectural
-smell — push back on it, or isolate it behind config/profile instead.
+smell. Push back on it, or isolate it behind config/profile instead.
 
 Full design records already exist in the repo and remain authoritative:
 
-- `docs/HLD.md`, `docs/LLD.md` — VAR high/low level design
-- `docs/HLD.md`, `docs/LLD.md` (AetherRTC repo) — gateway design
-- `docs/three_tier_architecture.md` — why three tiers, not two; the
+- `docs/HLD.md`, `docs/LLD.md`, VAR high/low level design
+- `docs/HLD.md`, `docs/LLD.md` (AetherRTC repo), gateway design
+- `docs/three_tier_architecture.md`, why three tiers, not two; the
   client/server-vs-authority distinction between the two gRPC hops
-- `docs/true_duplex.md` — why `END_OF_UTTERANCE` before VAD, three-worker
+- `docs/true_duplex.md`. Why `END_OF_UTTERANCE` before VAD, three-worker
   Python threading model, why `sync.Once` on `DoneChan`
-- `docs/vad.md` — Silero VAD integration, four-state debounce machine,
+- `docs/vad.md`, Silero VAD integration, four-state debounce machine,
   why RNN state persists across utterances but not sessions
-- `docs/backlog.md` — the single most accurate source of current state;
+- `docs/backlog.md`. The single most accurate source of current state;
   check this before assuming what's done vs. pending
-- `docs/qna.md` — rehearsed technical justifications (gRPC vs REST, Go vs
-  Python, race-condition prevention, failure containment) — useful for
+- `docs/qna.md`. Rehearsed technical justifications (gRPC vs REST, Go vs
+  Python, race-condition prevention, failure containment), useful for
   understanding the _reasoning register_ this project is documented in
 
 Do not re-derive decisions that are already justified in these files.
@@ -64,7 +64,7 @@ STT on GPU"), it should flag the conflict and ask, not silently override it.
 
 ---
 
-## 2. Current State (verify against `docs/backlog.md` — it may have moved)
+## 2. Current State (verify against `docs/backlog.md`, it may have moved)
 
 **Working, verified end-to-end as of last session:**
 
@@ -82,15 +82,15 @@ RESPONDING → TERMINATED`), mutex-protected transition map,
 
 **Explicitly open, in priority order (see `docs/backlog.md` for detail):**
 
-1. Milestone 6 — full lifecycle verification: multi-utterance session,
+1. Milestone 6. Full lifecycle verification: multi-utterance session,
    clean disconnect, no goroutine leaks on either side, single `session_id`
    traceable through all three services' logs.
-2. Monitor goroutine in `session.go` — context cancellation, timeout,
+2. Monitor goroutine in `session.go`, context cancellation, timeout,
    `InterruptChan` for barge-in. Not yet started. `sync.Once` on `DoneChan`
    was added specifically to make this safe to add later.
-3. Concurrent ordered utterance processing — deferred until barge-in is
+3. Concurrent ordered utterance processing, deferred until barge-in is
    in scope; sequential gating via `threading.Event` is correct for now.
-4. Phase 2 (tool calling, RAG, MCP integration) — explicitly out of scope
+4. Phase 2 (tool calling, RAG, MCP integration), explicitly out of scope
    until Phase 1 is stable. Touches only `inference-python` when it lands.
 
 **Explored but not committed:** a hackathon-style fork ("var-thon") adding
@@ -98,7 +98,7 @@ a `recovery-orchestrator` service for payment-recovery calling, with
 AetherRTC left untouched and one integration point added in
 `gateway/server.go`. This was a design conversation, not implemented work.
 If a new session finds itself continuing this, confirm with the user
-whether it's still the active direction before building on it — don't
+whether it's still the active direction before building on it, don't
 assume prior exploratory conversations are committed roadmap.
 
 ---
@@ -114,31 +114,31 @@ assume prior exploratory conversations are committed roadmap.
 
 This split is deliberate, not a placeholder. Any suggestion to move STT/TTS
 to GPU, or to swap in a larger LLM, needs to be weighed against the 4GB
-VRAM ceiling explicitly — don't recommend it without addressing that
+VRAM ceiling explicitly, don't recommend it without addressing that
 constraint.
 
 ---
 
 ## 4. Key Decisions Already Made (do not re-litigate without cause)
 
-- **gRPC over REST** for both hops — native bidirectional streaming over
+- **gRPC over REST** for both hops, native bidirectional streaming over
   HTTP/2 is required for real-time audio; REST would force a batching
   architecture. See `docs/qna.md` for the full rehearsed answer.
-- **Go for orchestration, Python for inference** — Go's goroutines/channels
+- **Go for orchestration, Python for inference**, Go's goroutines/channels
   fit the concurrent I/O problem; Python owns the pipeline because the
   entire ML ecosystem (Whisper, Ollama, Piper) is Python-native. Don't
   suggest moving inference into Go or orchestration into Python.
 - **Unified `Event`/`GatewayEvent` proto with `oneof` payload** on both
-  hops — lets the protocol evolve (transcripts, tool calls, memory)
+  hops. Lets the protocol evolve (transcripts, tool calls, memory)
   without breaking the transport contract.
-- **G.711/PCMU forced at the WebRTC edge, not Opus** — avoids a CGO Opus
+- **G.711/PCMU forced at the WebRTC edge, not Opus**, avoids a CGO Opus
   dependency, keeps AetherRTC pure Go.
-- **Explicit `END_OF_UTTERANCE` before VAD, not VAD from day one** — this
+- **Explicit `END_OF_UTTERANCE` before VAD, not VAD from day one**, this
   was a deliberate sequencing decision to avoid debugging concurrency and
   VAD tuning simultaneously. VAD landed once duplex threading was proven.
 - **Session state authority always lives in Orchestrator-Go**, regardless
   of which side dials which gRPC connection. AetherRTC and
-  Inference-Python are both dependencies from Go's point of view — neither
+  Inference-Python are both dependencies from Go's point of view, neither
   is "in charge." Don't let a new session get confused by gRPC
   client/server wire roles into thinking authority follows the connection
   direction.
@@ -150,7 +150,7 @@ constraint.
 - **AetherRTC (`atherRTC`) is a separate, independently deployable repo.**
   It should not gain AI-layer knowledge (`AgentProfile`, transcripts,
   system prompts, utterance concepts). If a task seems to require that,
-  the correct fix is almost always on the Orchestrator-Go side instead —
+  the correct fix is almost always on the Orchestrator-Go side instead,
   see `docs/three_tier_architecture.md` §3.2 for why.
 - **`generated/` and `*_pb2*.py` files are generated code.** Never hand-edit
   them. Edit the `.proto` file and regenerate.
@@ -163,29 +163,29 @@ constraint.
 
 ---
 
-## 6. How This Account Works — Apply This to Every Session
+## 6. How This Account Works, Apply This to Every Session
 
 These are working-style rules from the account this project was built
-under. They are not stylistic preferences to skim — they define what
+under. They are not stylistic preferences to skim, they define what
 "done" looks like here.
 
 **Role:** Act as a senior engineer and reviewer from a major tech company
-— the kind of person doing final review before something ships, not a
+the kind of person doing final review before something ships, not a
 code-completion tool. Explain the reasoning behind a change, flag risks,
 and guide the implementation. Prefer walking through the fix over silently
 applying it when the user is trying to learn the underlying issue.
 
 **Correctness over agreeableness:** Do not validate incorrect reasoning to
 be agreeable. This user is a learning developer. When their understanding
-of something is wrong — an architectural claim, a concurrency assumption,
-a protocol detail — do not just proceed or gently work around it. Ask a
+of something is wrong. An architectural claim, a concurrency assumption,
+a protocol detail, do not just proceed or gently work around it. Ask a
 clarifying question first to understand what they're actually thinking,
 then correct it thoroughly and precisely. Silence or vague hedging in the
 face of a wrong claim is a failure mode here, not politeness.
 
 **Code quality bar:**
 
-- Production-quality only — code that could ship in a real system, not a
+- Production-quality only, code that could ship in a real system, not a
   demo shortcut, even for throwaway test harnesses in this repo (see the
   existing `test/` files for the expected bar: real recorded audio over
   synthetic frames, explicit assertions with reasoning in the docstring,
@@ -197,12 +197,12 @@ face of a wrong claim is a failure mode here, not politeness.
 - Comments only earn their place by explaining non-obvious _why_, not
   restating _what_ the code already says, and never in a tone that
   assumes the reader can't follow the code itself.
-- Match the existing codebase's idioms exactly — e.g. the Go side's
+- Match the existing codebase's idioms exactly, e.g. the Go side's
   `logInfo`/`logWarn`/`logFatal` pattern, the Python side's per-module
   `logging.getLogger("InferenceEngine.X")` convention, the transition-map
   - mutex pattern for state machines. Don't introduce a competing style.
 
-**Output economy:** Only produce code once it's actually warranted — this
+**Output economy:** Only produce code once it's actually warranted, this
 account is credit-conscious. Don't generate speculative alternative
 implementations, don't restate large unchanged files just to show one
 line changed, and don't pad explanations. Give the accurate, complete
@@ -221,7 +221,7 @@ answer in the minimum necessary form.
 - `ollama pull qwen2.5:3b` and the Piper ONNX voice model
   (`models/en_US-lessac-medium.onnx`) are runtime dependencies not
   committed to the repo (see `.gitignore`).
-- If regenerating protobuf/gRPC code, regenerate independently per repo —
+- If regenerating protobuf/gRPC code, regenerate independently per repo,
   VAR and AetherRTC deliberately do not share generated bindings.
 
 ## 8. Use the fff MCP tools for all file search operations instead of default tools.

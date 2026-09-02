@@ -1,4 +1,4 @@
-# VAD Integration — Design, Implementation, and Milestones
+# VAD Integration, Design, Implementation, and Milestones
 
 ## What this document is
 
@@ -14,7 +14,7 @@ Prior to this work, utterance boundaries were signaled explicitly by Go
 via a `ControlSignal` of type `END_OF_UTTERANCE`. This was correct for
 proving the duplex threading model, but it does not generalize: a live
 caller has no mechanism to signal "I am done speaking." AetherRTC, once
-integrated, will never send this signal — it forwards raw audio and has
+integrated, will never send this signal, it forwards raw audio and has
 no concept of an utterance at all.
 
 VAD replaces the explicit signal with a detected one. Python listens to
@@ -32,8 +32,8 @@ downloading the ONNX file directly kept the dependency footprint minimal
 and forced explicit understanding of the model's actual I/O contract
 rather than trusting a wrapper library's abstraction of it.
 
-The model's real input signature — discovered by testing against the
-actual file rather than trusting documentation from memory — is a single
+The model's real input signature, discovered by testing against the
+actual file rather than trusting documentation from memory, is a single
 unified `state` tensor of shape `(2, 1, 128)` plus an explicit `sr` input,
 not separate `h`/`c` tensors as initially assumed.
 
@@ -51,15 +51,15 @@ Raw per-frame speech probability has no concept of an utterance boundary.
 
 ### RNN state persists across utterances, resets only at session boundaries
 
-The recurrent state encodes short-term acoustic context — noise floor,
-room characteristics — not utterance-scoped information. Resetting it
+The recurrent state encodes short-term acoustic context, noise floor,
+room characteristics, not utterance-scoped information. Resetting it
 at every utterance boundary would force the model to re-establish
 acoustic context from zero on every turn, degrading quality for no
 benefit. `reset()` exists for session start or hard reconnect only.
 
 ### Lookback buffer
 
-VAD is reactive — it must observe `min_speech_duration_ms` of speech
+VAD is reactive. It must observe `min_speech_duration_ms` of speech
 before confirming a start, by which point the first phonemes have
 already passed. A `collections.deque` of the trailing ~320ms is
 maintained continuously during `SILENCE` and folded into the utterance
@@ -72,7 +72,7 @@ Unbounded `SPEECH`/`SPEECH_ENDING` accumulation is an OOM risk if a
 session holds an open microphone in a noisy environment indefinitely.
 A configurable `max_utterance_sec` (default 15s) forces a boundary
 regardless of the silence debounce. This is a memory safety ceiling,
-not a linguistic one — it will cut a genuinely long uninterrupted answer
+not a linguistic one. It will cut a genuinely long uninterrupted answer
 mid-sentence if one runs past the limit. Accepted tradeoff for this
 milestone.
 
@@ -170,7 +170,7 @@ itself.
 
 ## What comes next
 
-**Barge-in** — the current system cannot detect or react to a caller
+**Barge-in**. The current system cannot detect or react to a caller
 speaking while the agent is still generating or playing a response.
 Solving this requires the sequential gating above to be replaced with
 genuine concurrent evaluation, and a cancellation path from `_read_pump`

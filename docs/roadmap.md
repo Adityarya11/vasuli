@@ -1,8 +1,8 @@
-# Vasuli — Build Roadmap
+# Vasuli, Build Roadmap
 
 **Deadline: 5 September 2026**
 **Start: 22 August 2026**
-**Available days: 14 (college schedule — build days are evenings and weekends)**
+**Available days: 14 (college schedule, build days are evenings and weekends)**
 
 Each milestone has a single definition of done. Nothing is "done" until the stated verification passes. Do not move to the next milestone while the current one's verification is failing.
 
@@ -20,7 +20,7 @@ M1 and M2 have no dependency on each other. Build them in parallel if possible. 
 
 ---
 
-## M1 — Fork and Verify Baseline ✅ DONE
+## M1, Fork and Verify Baseline ✅ DONE
 
 **What:** Clone VAR into `vasuli/var-thon/`, delete `.git`, initialize the monorepo, verify the full three-tier pipeline still works end-to-end under the new directory structure.
 
@@ -37,7 +37,7 @@ M1 and M2 have no dependency on each other. Build them in parallel if possible. 
 
 ---
 
-## M2 — Recovery Orchestrator Skeleton
+## M2, Recovery Orchestrator Skeleton
 
 **What:** A new Go service in `vasuli/recovery-orchestrator/` with SQLite initialized and four endpoints returning real data.
 
@@ -85,20 +85,20 @@ curl localhost:8090/api/v1/campaigns/<id>/metrics
 
 ---
 
-## M3 — Wire var-thon to Recovery Orchestrator ✅ DONE
+## M3, Wire var-thon to Recovery Orchestrator ✅ DONE
 
 **What:** Two files added to `var-thon/services/orchestrator-go/`. At `START_SESSION`, var-thon calls the Recovery Orchestrator and uses the returned system prompt. At session end, it reports the outcome.
 
 **Files to create/modify:**
 
-`var-thon/services/orchestrator-go/internal/recovery/client.go` — new file:
+`var-thon/services/orchestrator-go/internal/recovery/client.go`, new file:
 
 - `type Client struct` with `baseURL` and `*http.Client`
 - `func (c *Client) AssignSession(callSessionID string) (*SessionContext, error)`
 - `func (c *Client) EndSession(callSessionID, outcome string) error`
 - Timeout: 3 seconds. If the Recovery Orchestrator doesn't respond in 3s, return error (caller falls back to static profile).
 
-`var-thon/services/orchestrator-go/internal/gateway/server.go` — modify `StreamAudio`:
+`var-thon/services/orchestrator-go/internal/gateway/server.go`, modify `StreamAudio`:
 
 - Accept `-recovery` flag in `cmd/gateway-server/main.go`
 - After receiving `START_SESSION` from AetherRTC, call `recoveryClient.AssignSession(sessionID)`
@@ -112,7 +112,7 @@ curl localhost:8090/api/v1/campaigns/<id>/metrics
 
 ```
 [Gateway] Recovery context assigned for session session_8444 (customer=Rahul Sharma, outstanding=420000 paise)
-[InferenceEngine] [session_8444] Profile received — agent: 'Sarah the Receptionist'
+[InferenceEngine] [session_8444] Profile received, agent: 'Sarah the Receptionist'
 [InferenceEngine.LLM] Sentence chunk ready: 'Hello Sir/Mr.'
 [InferenceEngine.LLM] Sentence chunk ready: 'Sharma, this is Priya from Razorpay Merchant Services here to contact you regarding a payment issue.'
 [InferenceEngine.LLM] Sentence chunk ready: 'May I please confirm that we are speaking with Rahul Sharma?'
@@ -129,7 +129,7 @@ call_ended          {"outcome":"UNCLEAR"}
 outcome_classified  {"outcome":"UNCLEAR"}
 ```
 
-Note the agent identity in Python's log line still reads `Sarah the Receptionist` — expected, not a bug. `Profile.Name` is deliberately left untouched by `resolveProfile` (see `docs/build-log.md`, 2026-08-24) and only exists for log/telemetry purposes. What the LLM actually says is driven entirely by `SystemPrompt`, which is where "You are Priya..." lives — confirmed here by the transcript itself.
+Note the agent identity in Python's log line still reads `Sarah the Receptionist`, expected, not a bug. `Profile.Name` is deliberately left untouched by `resolveProfile` (see `docs/build-log.md`, 2026-08-24) and only exists for log/telemetry purposes. What the LLM actually says is driven entirely by `SystemPrompt`, which is where "You are Priya..." lives, confirmed here by the transcript itself.
 
 **Measured performance (recovery profile, 3-utterance call, warm model):**
 
@@ -139,13 +139,13 @@ Note the agent identity in Python's log line still reads `Sarah the Receptionist
 | 2         | 0.636s      | 0.405s   |
 | 3         | 0.644s      | 0.463s   |
 
-Average TTFT (~0.51s) and STT (~0.67s) both run slightly above the receptionist-profile baseline in `var-thon/README.md` (~0.42s TTFT, ~0.98s STT) — expected, not a regression: the recovery system prompt carries substantially more context than the two-sentence receptionist prompt, so there's more for the model to process before the first token.
+Average TTFT (~0.51s) and STT (~0.67s) both run slightly above the receptionist-profile baseline in `var-thon/README.md` (~0.42s TTFT, ~0.98s STT). Expected, not a regression: the recovery system prompt carries substantially more context than the two-sentence receptionist prompt, so there's more for the model to process before the first token.
 
 **Status: Complete.**
 
 ---
 
-## M4 — Recovery Agent Profile ✅ DONE
+## M4, Recovery Agent Profile ✅ DONE
 
 **What:** `var-thon/configs/agent_profiles/recovery_agent.yaml`. The fallback profile used when the Recovery Orchestrator queue is empty. Also establishes the system prompt template used by the Recovery Orchestrator for rendering per-session prompts.
 
@@ -191,13 +191,13 @@ You are calling {{.CustomerName}} regarding an outstanding payment of
 
 ```
 [Gateway] session session_1000: recovery queue empty, using static profile 'Priya'.
-[InferenceEngine] [session_1000] Profile received — agent: 'Priya'
+[InferenceEngine] [session_1000] Profile received, agent: 'Priya'
 [InferenceEngine.LLM] Sentence chunk ready: 'Namaste! This is Priya here, representing [Merchant Name] with Razorpay.'
 [InferenceEngine.LLM] Sentence chunk ready: 'How can I assist you today?'
 ```
 
 Before this milestone, the empty-queue fallback was `-profile receptionist`
-(a dental-clinic persona left over from VAR) — exactly what session
+(a dental-clinic persona left over from VAR), exactly what session
 `session_59058` hit during M3 testing (`docs/build-log.md`, 26 Aug). Now
 the fallback is dignified: same Priya persona as an assigned call, just
 without a specific customer's name or amount.
@@ -206,7 +206,7 @@ without a specific customer's name or amount.
 
 ---
 
-## M5 — Post-Call Outcome Classification ✅ DONE
+## M5, Post-Call Outcome Classification ✅ DONE
 
 **What:** After the last utterance completes in Inference-Python, run a single blocking LLM call to classify the call outcome. Pass the result to var-thon Orchestrator-Go, which includes it in the `EndSession` HTTP call.
 
@@ -233,7 +233,7 @@ Use Option B. It keeps Inference-Python's only external dependency as gRPC (no H
 
 Option B was taken, but **not** by overloading `Transcript` with JSON. A
 purpose-built `CallOutcome` message was added to the `Event` oneof
-instead — `protoc` and both plugin versions already matched what
+instead, `protoc` and both plugin versions already matched what
 generated the existing bindings, so regeneration was cheap and the
 generated diff stayed confined to the new message. An outcome is not a
 transcript; the typed field also gives `promise_date` a home for free.
@@ -275,7 +275,7 @@ Rahul Sharma | link_sent | plink_stub_a7cd414f83bb952d | 1
 ```
 
 Note the status is `link_sent`, not `recovered`, contradicting the
-definition of done written above — that was drafted before the status
+definition of done written above, that was drafted before the status
 lifecycle existed. `recovered` is reserved for a confirmed
 `payment.captured` webhook (M6). `link_sent` is the correct terminal
 state for a call that ended in agreement but has no payment confirmation
@@ -288,20 +288,20 @@ Full classification latency was 0.858s, and end-to-end teardown
 
 ---
 
-## M6 — Razorpay Test-Mode Integration
+## M6, Razorpay Test-Mode Integration
 
 **What:** Webhook consumer (inbound) and payment link creation (outbound) in the Recovery Orchestrator.
 
-**Inbound — `POST /webhooks/razorpay`:**
+**Inbound, `POST /webhooks/razorpay`:**
 
 - Verify `X-Razorpay-Signature` header: HMAC-SHA256 of raw request body with webhook secret
 - Parse event type from JSON body
 - On `payment.failed`: create a `recovery_session` (if campaign is active)
 - On `payment.captured`: find matching `recovery_session` by `razorpay_payment_id`, update status=`recovered`, set `recovered_at`
 
-For the demo, Razorpay test-mode events are simulated manually with curl — you don't need a live payment flow to demonstrate the system.
+For the demo, Razorpay test-mode events are simulated manually with curl. You don't need a live payment flow to demonstrate the system.
 
-**Outbound — payment link creation:**
+**Outbound, payment link creation:**
 
 ```
 POST https://api.razorpay.com/v1/payment_links
@@ -311,7 +311,7 @@ Content-Type: application/json
 {
   "amount": <outstanding_paise>,
   "currency": "INR",
-  "description": "Payment recovery — <product_name>",
+  "description": "Payment recovery, <product_name>",
   "customer": { "name": "<customer_name>" },
   "notify": { "sms": false, "email": false },
   "reminder_enable": false
@@ -338,7 +338,7 @@ events, matched on different columns:
 | ----- | ---------- | ------- |
 | `payment.captured` | `razorpay_payment_id` | the original failed payment was settled |
 | `payment_link.paid` | `razorpay_link_id` | a customer paid a link Vasuli generated |
-| `payment.failed` | — | creates a session on the active campaign |
+| `payment.failed` |, | creates a session on the active campaign |
 
 Decisions taken:
 
@@ -354,7 +354,7 @@ Decisions taken:
   generated autonomously from an AI conversation; the gap between test
   and live is one CLI flag.
 - **All handlers are idempotent.** Webhook delivery is at-least-once, so
-  redelivery is the normal path — duplicates change no state and log as
+  redelivery is the normal path, duplicates change no state and log as
   duplicates.
 
 **Verification (28 Aug), no Razorpay credentials required:**
@@ -391,7 +391,7 @@ asserted against a local stand-in; only the credentials are outstanding.
 
 ---
 
-## M7 — Metrics and Synthetic Batch ✅ DONE
+## M7, Metrics and Synthetic Batch ✅ DONE
 
 **What:** The metrics endpoint returns accurate numbers. A synthetic batch of 20 accounts is loaded and several calls are manually completed to populate realistic data.
 
@@ -433,15 +433,15 @@ was `status = 'pending'` and no outcome returns a session to that state.
 A promise nobody follows up on is not a recovery workflow.
 
 So M7 became the scheduler. `next_eligible_at` is written when each outcome
-is recorded, and one predicate — `store.eligibleNow` — governs assignment:
+is recorded, and one predicate, `store.eligibleNow`, governs assignment:
 
 | Outcome | Next contact |
 | ------- | ------------ |
 | `UNCLEAR` | +24h |
 | `AGREED`, link unpaid | +24h, exactly when the link expires |
 | `PROMISED` | the promised date, else +24h |
-| `REFUSED` | never — escalated to a human agent |
-| Payment confirmed | never — follow-up cancelled |
+| `REFUSED` | never, escalated to a human agent |
+| Payment confirmed | never, follow-up cancelled |
 | Attempts exhausted | never |
 
 `GET /api/v1/campaigns/{id}/queue` renders this as due / on hold / closed,
@@ -455,7 +455,7 @@ Also in scope, and departing from the plan above:
   metric that can only be zero invites a question with no good answer.
 - **Amounts are entered in rupees**, converted to paise once at the API
   boundary. Storage and Razorpay calls stay in paise.
-- **Metrics report `escalated_to_human`, not `refused`** — the accurate
+- **Metrics report `escalated_to_human`, not `refused`**, the accurate
   description of what happens to a disputed debt.
 - **Text-format metrics dropped.** Pretty-printing is not what
   "batch-level results" asks for.
@@ -471,7 +471,7 @@ follow-up armed → payment confirmed → closed, follow-up cleared. A blanket
 
 ---
 
-## M8 — Demo Rehearsal
+## M8, Demo Rehearsal
 
 **What:** Full demo sequence run twice cleanly. All services start without errors. The live call is under 60 seconds. The metrics output is correct.
 
@@ -503,7 +503,7 @@ follow-up armed → payment confirmed → closed, follow-up cleared. A blanket
 | M7        | 1 evening           | 31 Aug            |
 | M8        | 2 days of rehearsal | 3–4 Sep           |
 
-Buffer before 5 Sep deadline: 1 day. Use it for README polish, demo video, and submission packaging — not for new features.
+Buffer before 5 Sep deadline: 1 day. Use it for README polish, demo video, and submission packaging, not for new features.
 
 ---
 
@@ -511,10 +511,10 @@ Buffer before 5 Sep deadline: 1 day. Use it for README polish, demo video, and s
 
 These are tracked, not forgotten. They do not ship for this submission.
 
-- Barge-in (monitor goroutine in var-thon) — not needed for structured recovery calls
-- Tool calling during live calls — post-call classification handles outcome detection
-- TURN server for NAT traversal — demo is local/same-network
-- Goroutine leak verification (Milestone 6 in original VAR) — VAR's concern, not var-thon's
+- Barge-in (monitor goroutine in var-thon), not needed for structured recovery calls
+- Tool calling during live calls. Post-call classification handles outcome detection
+- TURN server for NAT traversal, demo is local/same-network
+- Goroutine leak verification (Milestone 6 in original VAR), VAR's concern, not var-thon's
 - Multi-tenancy, auth, rate limiting in Recovery Orchestrator
-- Hinglish / multilingual STT — English pinned, 0.67s latency saving kept
+- Hinglish / multilingual STT, English pinned, 0.67s latency saving kept
 - Concurrent ordered utterance processing

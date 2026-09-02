@@ -1,4 +1,4 @@
-# Voice Agent Runtime — Work Log & Backlog
+# Voice Agent Runtime, Work Log & Backlog
 
 ## Completed Work
 
@@ -14,12 +14,12 @@
 ### 2. Session Management
 
 - `session.go` rewritten from a passive data struct into an active controller owning the gRPC stream reference via `Attach()`.
-- State machine enforced via a legal transition map protected by `sync.Mutex`. Illegal transitions log an error and no-op — they never panic or silently corrupt state.
+- State machine enforced via a legal transition map protected by `sync.Mutex`. Illegal transitions log an error and no-op, they never panic or silently corrupt state.
 - `writePump()` goroutine owns all outbound gRPC sends. Drains `UserAudioChan`, transitions to `PROCESSING` on exhaustion.
 - `readPump()` goroutine owns all inbound gRPC receives. Transitions to `RESPONDING` on first audio chunk. Closes `AgentAudioChan` and `DoneChan` on EOF.
-- `main.go` decoupled from gRPC entirely — feeds `UserAudioChan`, reads `AgentAudioChan`, has no knowledge of stream internals.
+- `main.go` decoupled from gRPC entirely. Feeds `UserAudioChan`, reads `AgentAudioChan`, has no knowledge of stream internals.
 - `InterruptChan` allocated and reserved for future barge-in support.
-- `DoneChan` closure hardened with `sync.Once` via a `signalDone()` method — safe against multiple goroutines racing to signal session completion once the monitor goroutine lands.
+- `DoneChan` closure hardened with `sync.Once` via a `signalDone()` method. Safe against multiple goroutines racing to signal session completion once the monitor goroutine lands.
 
 ---
 
@@ -29,7 +29,7 @@
   to eliminate cold-start overhead and enable incremental delivery.
 - STT language pinned to English, bypassing autodetection and reducing
   transcription latency by ~0.67s in measured runs.
-- Sentence-boundary chunking with minimum length guard — TTS begins
+- Sentence-boundary chunking with minimum length guard, TTS begins
   synthesizing the first sentence while the LLM is still generating later
   sentences.
 - Per-stage latency instrumentation added: STT latency, TTFT, per-chunk
@@ -52,9 +52,9 @@ Full design record, decisions, and milestone breakdown documented in
   boundary signal atomically, eliminating the channel-drain race that
   caused audio bleeding between utterances.
 - `utterance_done_event` (`threading.Event`) gates sequential utterance
-  dispatch — verified with two distinct audio inputs on one open stream,
+  dispatch. Verified with two distinct audio inputs on one open stream,
   zero byte bleeding, correct and distinct responses.
-- Empty buffer guard, backpressure policy (deferred — TTS latency
+- Empty buffer guard, backpressure policy (deferred, TTS latency
   exceeds gRPC send latency on current hardware), and temp file cleanup
   verified as milestone 4.
 
@@ -76,7 +76,7 @@ SPEECH_ENDING`) in `vad/detector.py`, validated against real recorded
   `VADDetector` a pure state machine with no gRPC or byte-handling
   knowledge.
 - `_read_pump` instantiates `VADDetector` and `AudioPreprocessor` fresh
-  per session — both are stateful and must not be shared across calls.
+  per session. Both are stateful and must not be shared across calls.
 - Lookback buffer (`collections.deque`, ~320ms) added to capture the
   phonetic onset of speech that occurs before the debounce threshold
   confirms an utterance start.
@@ -96,7 +96,7 @@ SPEECH_ENDING`) in `vad/detector.py`, validated against real recorded
 signal. `StreamAudio` (audio only, no boundary) and `StreamSilence`
 (explicit zeroed PCM injection) added to `session.go`, factored through
 a shared `sendAudioChunk` helper alongside the existing `StreamUtterance`
-— no duplicated chunking logic, no test-only flags added to the
+no duplicated chunking logic, no test-only flags added to the
 production session API.
 
 One real bug surfaced during this test: root cause was `stream.CloseSend()`
@@ -106,7 +106,7 @@ queue the moment inbound input ended, without checking for an in-flight
 inference thread. Removing `CloseSend()` resolved it.
 
 Known limitation carried forward: `_read_pump` does not currently support
-half-close — input ending and response completion are not independently
+half-close. Input ending and response completion are not independently
 tracked. Revisit alongside the monitor goroutine.
 
 ---
@@ -122,20 +122,20 @@ Browser <--WebRTC--> AetherRTC <--gRPC--> Orchestrator-Go <--gRPC--> Inference-P
                       (gateway.proto)                (agent.proto)
 ```
 
-**Milestone 1 — Proto contracts** ✅
+**Milestone 1, Proto contracts** ✅
 
 - `gateway.proto` finalized with `oneof GatewayEvent { AudioChunk audio; GatewayControl control; }`.
-- `int32 source_sample_rate = 3` added to `agent.proto`'s `ControlSignal` — purely additive.
+- `int32 source_sample_rate = 3` added to `agent.proto`'s `ControlSignal`, purely additive.
 - Both repos compile with new fields; independent codegen, no shared bindings between repos.
 
-**Milestone 2 — Orchestrator-Go: Gateway server skeleton** ✅
+**Milestone 2, Orchestrator-Go: Gateway server skeleton** ✅
 
 - `internal/gateway/server.go` implements `Gateway` service on `:50052`.
 - Reads `GatewayControl{START_SESSION, source_sample_rate}` as first event.
 - Creates `Session` via existing `NewSession`, attaches to fresh `agent.proto` stream.
 - Verified via throwaway test client.
 
-**Milestone 3 — Orchestrator-Go: bidirectional bridge** ✅
+**Milestone 3, Orchestrator-Go: bidirectional bridge** ✅
 
 - Inbound relay: `GatewayEvent{AudioChunk}` → forwarded as `agent.proto` `Event{AudioChunk}` to Python.
 - Outbound relay: goroutine draining `AgentAudioChan` → `GatewayEvent{AudioChunk}` back to AetherRTC.
@@ -143,49 +143,49 @@ Browser <--WebRTC--> AetherRTC <--gRPC--> Orchestrator-Go <--gRPC--> Inference-P
 - `END_SESSION` handling closes session cleanly.
 - Verified: test client streaming real WAV bytes produced correct STT/LLM/TTS cycle.
 
-**Milestone 4 — AetherRTC: bridge client** ✅
+**Milestone 4, AetherRTC: bridge client** ✅
 
-- `internal/bridge/client.go` — single shared `grpc.ClientConn` to Orchestrator-Go, one `StreamAudio` per session.
-- `internal/bridge/stream_manager.go` — drains `PCMInboundChan`, sends `AudioChunk`s, receives reverse stream onto `PCMOutboundChan`.
+- `internal/bridge/client.go`, single shared `grpc.ClientConn` to Orchestrator-Go, one `StreamAudio` per session.
+- `internal/bridge/stream_manager.go`. Drains `PCMInboundChan`, sends `AudioChunk`s, receives reverse stream onto `PCMOutboundChan`.
 - Wired into `signaling/server.go` after `ProcessOffer` succeeds.
-- Verified: real browser tab produced correct STT/LLM/TTS cycle in Python logs — live mic audio end to end.
+- Verified: real browser tab produced correct STT/LLM/TTS cycle in Python logs, live mic audio end to end.
 
 **Bugs discovered and fixed during Milestone 4 live testing:**
 
 - `SOURCE_SAMPLE_RATE` was hardcoded to 44100 in `main.py` regardless of negotiated rate. Fixed: defer `AudioPreprocessor` construction until `START_SESSION` control event is received, using `control.source_sample_rate`.
 - `AudioPreprocessor.push()` resampled each 20ms RTP packet independently, causing ramp-up/ramp-down filter artifacts at every packet boundary. Fixed: buffer raw samples and resample in 100ms blocks, yielding frames from the combined output.
-- `_read_pump` blocked on `utterance_done_event.wait()` while a previous utterance was still being processed, freezing gRPC inbound read, backpressuring Go, filling `PCMInboundChan`, and silently dropping incoming audio. Fixed: decoupled VAD ingest from inference dispatch via `utterance_queue` and `_utterance_dispatcher` thread — read loop never blocks.
+- `_read_pump` blocked on `utterance_done_event.wait()` while a previous utterance was still being processed, freezing gRPC inbound read, backpressuring Go, filling `PCMInboundChan`, and silently dropping incoming audio. Fixed: decoupled VAD ingest from inference dispatch via `utterance_queue` and `_utterance_dispatcher` thread, read loop never blocks.
 - VAD pause tolerance raised to 800ms to reduce premature utterance cuts on natural speech pauses.
-- Per-session conversation history added to `SessionContext` — LLM no longer treats every utterance as a fresh call. `generate_stream_with_messages` added to `LLMEngine` to accept pre-built message history.
+- Per-session conversation history added to `SessionContext`, LLM no longer treats every utterance as a fresh call. `generate_stream_with_messages` added to `LLMEngine` to accept pre-built message history.
 
-**Milestone 5 — AetherRTC: outbound audio path** ✅
+**Milestone 5, AetherRTC: outbound audio path** ✅
 
-- `EncodeUlaw` implemented in `pkg/codec/g117.go` — PCM16 LE → 8-bit µ-law.
+- `EncodeUlaw` implemented in `pkg/codec/g117.go`, PCM16 LE → 8-bit µ-law.
 - `TrackLocalStaticSample` (PCMU, 8kHz) added to `PeerSession` before `ProcessOffer`.
-- `rtpSender.ReadRTCP()` drain goroutine added — prevents Pion sender buffer from backing up.
+- `rtpSender.ReadRTCP()` drain goroutine added, prevents Pion sender buffer from backing up.
 - Outbound goroutine: accumulates PCM into buffer, drains in exact 320-byte (20ms) frames, ticker-paced at 20ms intervals, `EncodeUlaw` → `WriteSample`.
-- `AgentSpeaking` atomic bool gates inbound microphone capture while AI is speaking — prevents acoustic feedback loop.
-- `AgentSpeaking` clears unconditionally on 300ms idle timeout (not conditional on `len(pcmBuffer) == 0` — that condition is permanently false due to sub-frame PCM remainders after the last TTS sentence).
-- `PCMOutboundChan` send in `stream_manager.go` is blocking with `DoneChan` escape, not `default:` drop — ensures audio reaches the playback goroutine under normal operation.
+- `AgentSpeaking` atomic bool gates inbound microphone capture while AI is speaking, prevents acoustic feedback loop.
+- `AgentSpeaking` clears unconditionally on 300ms idle timeout (not conditional on `len(pcmBuffer) == 0`. That condition is permanently false due to sub-frame PCM remainders after the last TTS sentence).
+- `PCMOutboundChan` send in `stream_manager.go` is blocking with `DoneChan` escape, not `default:` drop. Ensures audio reaches the playback goroutine under normal operation.
 - Verified: response audio audible in browser tab.
 
 **Known limitation identified during Milestone 5:**
-First-run VAD detection lag (~5–10 seconds from process start) appears to be Piper ONNX graph initialization cost on first `synthesize()` call combined with Ollama model load time — not a VAD bug. Second run within the same process is immediate. Not yet confirmed with timestamps; revisit if it persists or worsens.
+First-run VAD detection lag (~5–10 seconds from process start) appears to be Piper ONNX graph initialization cost on first `synthesize()` call combined with Ollama model load time, not a VAD bug. Second run within the same process is immediate. Not yet confirmed with timestamps; revisit if it persists or worsens.
 
 ---
 
 ## Active Backlog
 
-### 1. AetherRTC Integration — Milestone 6: End-to-end verification
+### 1. AetherRTC Integration, Milestone 6: End-to-end verification
 
-**Priority:** High — immediate next milestone.
+**Priority:** High, immediate next milestone.
 
-- [ ] Full lifecycle test: connect, speak multiple utterances, disconnect —
+- [ ] Full lifecycle test: connect, speak multiple utterances, disconnect,
       verify `Session.Terminate()` and `PeerSession.Close()` both fire
       cleanly with no goroutine leaks on either side.
 - [ ] Confirm a single `session_id` is identical across AetherRTC,
       Orchestrator-Go, and Python logs for one call.
-- [ ] Confirm no goroutine leak on browser disconnect — specifically that
+- [ ] Confirm no goroutine leak on browser disconnect, specifically that
       `bridge.RunSession` exits cleanly and `DoneChan` closes on both sides.
 
 Exit criteria: three full turns of conversation, clean disconnect, all three
@@ -220,18 +220,18 @@ and an ordering queue on the outbound side.
 Tool calling, RAG, MCP integration, and broader agent extensibility deferred
 until Phase 1 (single-user, VAD-driven, AetherRTC-connected pipeline) is
 stable and Milestone 6 verified. This phase touches only `inference-python`
-— no bearing on AetherRTC or the gateway contract.
+no bearing on AetherRTC or the gateway contract.
 
 ---
 
 ## Reference Documents
 
-- [`docs/HLD.md`](HLD.md) — High Level Design
-- [`docs/LLD.md`](LLD.md) — Low Level Design
-- [`docs/true_duplex.md`](true_duplex.md) — True Duplex implementation
+- [`docs/HLD.md`](HLD.md), High Level Design
+- [`docs/LLD.md`](LLD.md), Low Level Design
+- [`docs/true_duplex.md`](true_duplex.md), True Duplex implementation
   design, milestone breakdown, and architectural decisions
-- [`docs/vad.md`](vad.md) — VAD integration design, milestone breakdown,
+- [`docs/vad.md`](vad.md), VAD integration design, milestone breakdown,
   and architectural decisions
-- [`docs/three-tier-architecture.md`](three-tier-architecture.md) —
+- [`docs/three-tier-architecture.md`](three-tier-architecture.md),
   AetherRTC / Orchestrator-Go / Inference-Python topology, proto
   contracts, and full session lifecycle walkthrough

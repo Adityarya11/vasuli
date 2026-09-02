@@ -1,4 +1,4 @@
-# Orchestrator — Go
+# Orchestrator, Go
 
 The orchestrator is the control plane of the voice runtime. It manages
 session lifecycle, owns the gRPC stream to the inference engine, and routes
@@ -47,7 +47,7 @@ The `-profile` flag accepts the name of any YAML file present in
 
 Available profiles out of the box:
 
-- `receptionist` — Sarah, front desk agent for Smile Dental Clinic
+- `receptionist`, Sarah, front desk agent for Smile Dental Clinic
 
 Output audio is written to `test_data/output.raw` as raw PCM bytes.
 
@@ -58,7 +58,7 @@ Always start the inference engine before starting the orchestrator.
 ## Session State Machine
 
 Every call moves through a strict lifecycle. Illegal transitions are
-caught and logged — they never silently corrupt state.
+caught and logged, they never silently corrupt state.
 
 ```text
 CREATED

@@ -4,7 +4,7 @@
 # has no pending session to assign (empty queue, or unreachable). The
 # per-customer system prompt used for an actually-assigned call is rendered
 # by recovery-orchestrator's campaign.Manager and overrides this file's
-# system_prompt entirely — this file only needs to exist, be loadable, and
+# system_prompt entirely. This file only needs to exist, be loadable, and
 # sound like the same persona when nobody specific has been assigned yet.
 name: "Priya"
 description: "Payment recovery specialist for Razorpay merchants."
