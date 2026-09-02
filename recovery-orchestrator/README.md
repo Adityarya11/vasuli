@@ -113,7 +113,7 @@ Create a campaign and bulk-insert its accounts. Renders a per-customer
 system prompt for each account at creation time — `var-thon` never does
 template substitution itself.
 
-**Request**
+**Request** — amounts are whole rupees:
 
 ```json
 {
@@ -121,7 +121,7 @@ template substitution itself.
   "accounts": [
     {
       "customer_name": "Rahul Sharma",
-      "outstanding_paise": 420000,
+      "outstanding_rupees": 4200,
       "product_name": "Bajaj Finance Personal Loan",
       "due_date": "2026-08-15",
       "razorpay_payment_id": "pay_test_001"
@@ -129,6 +129,11 @@ template substitution itself.
   ]
 }
 ```
+
+Rupees appear only at this boundary. Internally, and in every call to
+Razorpay, money is an integer count of paise — the smallest unit, which is
+what Razorpay's API expects and what keeps floating point out of currency
+arithmetic.
 
 **Response — `201 Created`**
 
@@ -223,6 +228,31 @@ Aggregate counts and amounts for a campaign, computed live from
   "razorpay_captured_confirmed": 0
 }
 ```
+
+### `GET /api/v1/campaigns/{id}/queue`
+
+Who the system will call, who it is waiting on, and who it has finished
+with. Read-only; it does not consume the queue.
+
+```json
+{
+  "campaign_id": "camp_...",
+  "generated_at": "2026-09-02T14:30:00Z",
+  "due_now": [
+    {"customer_name":"Rahul Sharma","outstanding_rupees":4200,"status":"pending","attempt":"0 of 3"}
+  ],
+  "on_hold": [
+    {"customer_name":"Preethi Nair","status":"unclear","attempt":"1 of 3","next_eligible_at":"2026-09-03T14:22:00Z"}
+  ],
+  "closed": [
+    {"customer_name":"Vikram Rao","status":"refused","reason":"escalated to human agent"}
+  ]
+}
+```
+
+Buckets come from the same `eligibleNow` predicate the assignment query
+uses, so this view cannot claim a customer is due while the assigner skips
+them.
 
 ### `POST /webhooks/razorpay`
 
@@ -371,6 +401,11 @@ vertical slices rather than strictly sequentially.
       stub when credentials are supplied; startup refuses non-test keys
 - [x] Go unit tests for signature verification, payload parsing, and the
       live client's request shape
+
+- [x] Follow-up scheduling — every outcome decides when the customer may be
+      contacted again, or that they never may be
+- [x] Queue view showing due / on hold / closed, from the same predicate the
+      assigner uses
 
 **Not yet built:**
 

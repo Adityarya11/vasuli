@@ -38,6 +38,14 @@ CREATE TABLE IF NOT EXISTS recovery_sessions (
     razorpay_link_id        TEXT,
     contact_attempts        INTEGER NOT NULL DEFAULT 0,
     max_contact_attempts    INTEGER NOT NULL DEFAULT 3,
+
+    -- When this customer may next be contacted. NULL means never again:
+    -- recovered, escalated to a human, or out of attempts.
+    --
+    -- NULL is the fail-safe direction on purpose. A code path that forgets
+    -- to set this leaves the customer uncontacted, which is recoverable.
+    -- The opposite default would leave them contacted forever.
+    next_eligible_at        DATETIME,
     created_at              DATETIME DEFAULT CURRENT_TIMESTAMP,
     call_started_at         DATETIME,
     call_ended_at           DATETIME,

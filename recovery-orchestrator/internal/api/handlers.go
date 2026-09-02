@@ -3,12 +3,18 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"vasuli/recovery-orchestrator/internal/campaign"
 	"vasuli/recovery-orchestrator/internal/store"
 )
+
+// paisePerRupee converts the rupees a human writes into the paise the
+// system stores and Razorpay expects.
+const paisePerRupee = 100
 
 type Handlers struct {
 	manager *campaign.Manager
@@ -41,9 +47,15 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 // --- POST /api/v1/campaigns ---
 
+// createAccountRequest takes whole rupees, while everything downstream
+// works in paise. Money is stored and sent as an integer count of the
+// smallest unit — that is what Razorpay's API expects, and it keeps
+// floating point out of currency arithmetic entirely. Rupees appear only
+// here, where a human writes the fixture and 4200 is easier to check than
+// 420000.
 type createAccountRequest struct {
 	CustomerName      string `json:"customer_name"`
-	OutstandingPaise  int64  `json:"outstanding_paise"`
+	OutstandingRupees int64  `json:"outstanding_rupees"`
 	ProductName       string `json:"product_name"`
 	DueDate           string `json:"due_date"`
 	RazorpayPaymentID string `json:"razorpay_payment_id"`
@@ -77,7 +89,7 @@ func (h *Handlers) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 	for i, a := range req.Accounts {
 		accounts[i] = store.Account{
 			CustomerName:      a.CustomerName,
-			OutstandingPaise:  a.OutstandingPaise,
+			OutstandingPaise:  a.OutstandingRupees * paisePerRupee,
 			ProductName:       a.ProductName,
 			DueDate:           a.DueDate,
 			RazorpayPaymentID: a.RazorpayPaymentID,
@@ -220,23 +232,112 @@ func (h *Handlers) CampaignMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"campaign_id":   c.ID,
-		"campaign_name": c.Name,
+		"campaign_id":    c.ID,
+		"campaign_name":  c.Name,
+		"generated_at":   time.Now().UTC().Format(time.RFC3339),
 		"total_accounts": m.TotalAccounts,
 		"contacted":      m.Contacted,
 		"breakdown": map[string]any{
-			"recovered":              m.Recovered,
-			"recovered_amount_paise": m.RecoveredAmountPaise,
-			"promised":               m.Promised,
-			"promised_amount_paise":  m.PromisedAmountPaise,
-			"refused":                m.Refused,
-			"unclear":                m.Unclear,
+			"recovered":               m.Recovered,
+			"recovered_amount_rupees": m.RecoveredAmountPaise / paisePerRupee,
+			"promised":                m.Promised,
+			"promised_amount_rupees":  m.PromisedAmountPaise / paisePerRupee,
+			// Reported as an escalation rather than a rejection: the
+			// customer disputed the debt, which is a handoff to a human.
+			"escalated_to_human": m.Refused,
+			"unclear":            m.Unclear,
 		},
 		"pending":                     m.Pending,
 		"stopped_max_attempts":        m.StoppedMaxAttempts,
 		"payment_links_sent":          m.PaymentLinksSent,
 		"razorpay_captured_confirmed": m.RazorpayCaptured,
 	})
+}
+
+// --- GET /api/v1/campaigns/{id}/queue ---
+
+type queueEntryResponse struct {
+	SessionID        string `json:"session_id"`
+	CustomerName     string `json:"customer_name"`
+	OutstandingRupees int64 `json:"outstanding_rupees"`
+	ProductName      string `json:"product_name"`
+	Status           string `json:"status"`
+	Attempt          string `json:"attempt"`
+	NextEligibleAt   string `json:"next_eligible_at,omitempty"`
+	Reason           string `json:"reason,omitempty"`
+}
+
+// CampaignQueue answers "who does the system call next, and who is it
+// deliberately not calling" — the scheduling decisions made visible.
+func (h *Handlers) CampaignQueue(w http.ResponseWriter, r *http.Request) {
+	campaignID := r.PathValue("id")
+
+	c, err := h.db.GetCampaign(campaignID)
+	if err != nil {
+		log.Printf("[API] get campaign failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to load campaign")
+		return
+	}
+	if c == nil {
+		writeError(w, http.StatusNotFound, "campaign not found")
+		return
+	}
+
+	entries, err := h.db.CampaignQueue(campaignID)
+	if err != nil {
+		log.Printf("[API] campaign queue failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to load queue")
+		return
+	}
+
+	buckets := map[string][]queueEntryResponse{
+		store.BucketDueNow: {},
+		store.BucketOnHold: {},
+		store.BucketClosed: {},
+	}
+
+	for _, e := range entries {
+		entry := queueEntryResponse{
+			SessionID:         e.SessionID,
+			CustomerName:      e.CustomerName,
+			OutstandingRupees: e.OutstandingPaise / paisePerRupee,
+			ProductName:       e.ProductName,
+			Status:            e.Status,
+			Attempt:           fmt.Sprintf("%d of %d", e.ContactAttempts, e.MaxContactAttempts),
+		}
+		if e.NextEligibleAt.Valid && e.Bucket == store.BucketOnHold {
+			entry.NextEligibleAt = e.NextEligibleAt.Time.UTC().Format(time.RFC3339)
+		}
+		if e.Bucket == store.BucketClosed {
+			entry.Reason = closedReason(e.Status)
+		}
+		buckets[e.Bucket] = append(buckets[e.Bucket], entry)
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"campaign_id":   c.ID,
+		"campaign_name": c.Name,
+		"generated_at":  time.Now().UTC().Format(time.RFC3339),
+		"due_now":       buckets[store.BucketDueNow],
+		"on_hold":       buckets[store.BucketOnHold],
+		"closed":        buckets[store.BucketClosed],
+	})
+}
+
+// closedReason explains why a session will never be called again. Refused
+// is reported as an escalation rather than a rejection: the customer
+// disputed the debt, which is a handoff to a human, not an abandonment.
+func closedReason(status string) string {
+	switch status {
+	case store.StatusRecovered:
+		return "payment confirmed"
+	case store.StatusRefused:
+		return "escalated to human agent"
+	case store.StatusFailed:
+		return "contact attempts exhausted"
+	default:
+		return "no further contact scheduled"
+	}
 }
 
 // --- GET /health ---

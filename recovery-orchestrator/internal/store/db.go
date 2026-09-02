@@ -43,7 +43,61 @@ func Open(path string) (*DB, error) {
 		return nil, fmt.Errorf("store: failed to apply schema: %w", err)
 	}
 
+	if err := migrate(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+
 	return &DB{conn: conn}, nil
+}
+
+// migrate brings a database created by an earlier schema up to date.
+// CREATE TABLE IF NOT EXISTS silently does nothing when the table already
+// exists, so new columns have to be added separately or an existing
+// vasuli.db would fail every query that mentions them.
+func migrate(conn *sql.DB) error {
+	has, err := hasColumn(conn, "recovery_sessions", "next_eligible_at")
+	if err != nil {
+		return err
+	}
+	if has {
+		return nil
+	}
+
+	if _, err := conn.Exec(`ALTER TABLE recovery_sessions ADD COLUMN next_eligible_at DATETIME`); err != nil {
+		return fmt.Errorf("store: add next_eligible_at: %w", err)
+	}
+
+	// Backfill: anything still open becomes eligible immediately, anything
+	// already concluded stays NULL and is never contacted again.
+	if _, err := conn.Exec(
+		`UPDATE recovery_sessions
+		    SET next_eligible_at = COALESCE(call_ended_at, created_at, CURRENT_TIMESTAMP)
+		  WHERE status IN ('pending', 'active', 'unclear', 'link_sent', 'promised')`,
+	); err != nil {
+		return fmt.Errorf("store: backfill next_eligible_at: %w", err)
+	}
+
+	return nil
+}
+
+func hasColumn(conn *sql.DB, table, column string) (bool, error) {
+	rows, err := conn.Query(`SELECT name FROM pragma_table_info(?)`, table)
+	if err != nil {
+		return false, fmt.Errorf("store: inspect %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return false, fmt.Errorf("store: scan column name: %w", err)
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func (db *DB) Close() error {
@@ -101,6 +155,10 @@ type RecoverySession struct {
 	CallStartedAt      sql.NullTime
 	CallEndedAt        sql.NullTime
 	RecoveredAt        sql.NullTime
+
+	// NextEligibleAt is invalid (NULL) when this customer must never be
+	// contacted again — recovered, escalated to a human, or out of attempts.
+	NextEligibleAt sql.NullTime
 }
 
 func (db *DB) InsertCampaign(id, name string, total int) error {
@@ -115,11 +173,14 @@ func (db *DB) InsertCampaign(id, name string, total int) error {
 }
 
 func (db *DB) InsertRecoverySession(id, campaignID, systemPrompt string, acc Account) error {
+	// next_eligible_at is set on insert rather than defaulted, so a freshly
+	// loaded account is contactable immediately while the column keeps its
+	// fail-safe NULL-means-never semantics everywhere else.
 	_, err := db.conn.Exec(
 		`INSERT INTO recovery_sessions
 			(id, campaign_id, customer_name, outstanding_paise, product_name,
-			 due_date, razorpay_payment_id, system_prompt)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+			 due_date, razorpay_payment_id, system_prompt, next_eligible_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
 		id, campaignID, acc.CustomerName, acc.OutstandingPaise, acc.ProductName,
 		acc.DueDate, nullIfEmpty(acc.RazorpayPaymentID), systemPrompt,
 	)
@@ -143,10 +204,24 @@ func (db *DB) GetCampaign(id string) (*Campaign, error) {
 	return &c, nil
 }
 
-// AssignNextPending atomically pops the oldest pending session belonging
-// to an active campaign and binds it to callSessionID. Returns nil, nil
-// if no eligible session exists (empty queue) — callers must distinguish
-// this from an error and fall back accordingly.
+// eligibleNow is the single definition of "may be contacted". Both the
+// assignment query and the queue view read from it, so the scheduling rule
+// cannot drift between what the system does and what it reports.
+//
+// The status list is redundant with next_eligible_at when every write path
+// is correct, and is kept deliberately: this column gets edited by hand
+// during demos, and a stray UPDATE that caught an escalated row would
+// re-contact a customer the system promised never to call again.
+const eligibleNow = `
+	rs.next_eligible_at IS NOT NULL
+	AND rs.next_eligible_at <= CURRENT_TIMESTAMP
+	AND rs.contact_attempts < rs.max_contact_attempts
+	AND rs.status IN ('pending', 'unclear', 'link_sent', 'promised')`
+
+// AssignNextPending atomically claims the longest-waiting eligible session
+// belonging to an active campaign and binds it to callSessionID. Returns
+// nil, nil when nothing is due — callers must distinguish that from an
+// error and fall back accordingly.
 func (db *DB) AssignNextPending(callSessionID string) (*RecoverySession, error) {
 	tx, err := db.conn.Begin()
 	if err != nil {
@@ -159,8 +234,8 @@ func (db *DB) AssignNextPending(callSessionID string) (*RecoverySession, error) 
 		`SELECT rs.id
 		   FROM recovery_sessions rs
 		   JOIN campaigns c ON c.id = rs.campaign_id
-		  WHERE rs.status = 'pending' AND c.status = 'active'
-		  ORDER BY rs.created_at ASC
+		  WHERE c.status = 'active' AND (` + eligibleNow + `)
+		  ORDER BY rs.next_eligible_at ASC, rs.created_at ASC
 		  LIMIT 1`,
 	).Scan(&id)
 	if err == sql.ErrNoRows {
@@ -249,7 +324,7 @@ const sessionSelectCols = `
 	SELECT id, campaign_id, call_session_id, customer_name, outstanding_paise,
 	       product_name, due_date, razorpay_payment_id, system_prompt, status,
 	       promise_date, razorpay_link_id, contact_attempts, max_contact_attempts,
-	       created_at, call_started_at, call_ended_at, recovered_at
+	       created_at, call_started_at, call_ended_at, recovered_at, next_eligible_at
 	  FROM recovery_sessions`
 
 func (db *DB) scanSession(row *sql.Row) (*RecoverySession, error) {
@@ -258,7 +333,7 @@ func (db *DB) scanSession(row *sql.Row) (*RecoverySession, error) {
 		&s.ID, &s.CampaignID, &s.CallSessionID, &s.CustomerName, &s.OutstandingPaise,
 		&s.ProductName, &s.DueDate, &s.RazorpayPaymentID, &s.SystemPrompt, &s.Status,
 		&s.PromiseDate, &s.RazorpayLinkID, &s.ContactAttempts, &s.MaxContactAttempts,
-		&s.CreatedAt, &s.CallStartedAt, &s.CallEndedAt, &s.RecoveredAt,
+		&s.CreatedAt, &s.CallStartedAt, &s.CallEndedAt, &s.RecoveredAt, &s.NextEligibleAt,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -284,6 +359,11 @@ type OutcomeWrite struct {
 	PromiseDate    string
 	RazorpayLinkID string
 	Events         []AuditEvent
+
+	// NextEligibleAt is nil when this outcome ends contact permanently.
+	// It is always written, unlike the optional fields above, because
+	// "when may we call again" has a definite answer for every outcome.
+	NextEligibleAt *time.Time
 }
 
 // RecordOutcome applies an OutcomeWrite in a single transaction, but only
@@ -321,9 +401,10 @@ func (db *DB) RecordOutcome(w OutcomeWrite, allowedFrom []string) (bool, error) 
 		    SET status = ?,
 		        call_ended_at = CURRENT_TIMESTAMP,
 		        promise_date = COALESCE(NULLIF(?, ''), promise_date),
-		        razorpay_link_id = COALESCE(NULLIF(?, ''), razorpay_link_id)
+		        razorpay_link_id = COALESCE(NULLIF(?, ''), razorpay_link_id),
+		        next_eligible_at = ?
 		  WHERE id = ?`,
-		w.Status, w.PromiseDate, w.RazorpayLinkID, w.SessionID,
+		w.Status, w.PromiseDate, w.RazorpayLinkID, w.NextEligibleAt, w.SessionID,
 	)
 	if err != nil {
 		return false, fmt.Errorf("store: apply outcome: %w", err)
@@ -341,13 +422,37 @@ func (db *DB) RecordOutcome(w OutcomeWrite, allowedFrom []string) (bool, error) 
 	return true, nil
 }
 
+// SetNextEligibleAt reschedules a follow-up. It writes the timestamp and
+// nothing else — it does not check whether the session should ever be
+// contacted again, because that judgement belongs to the eligibleNow
+// predicate. A session escalated to a human stays out of the queue even
+// with a timer set, which is what makes hand-editing this column during a
+// demo safe.
+func (db *DB) SetNextEligibleAt(sessionID string, at time.Time) error {
+	_, err := db.conn.Exec(
+		`UPDATE recovery_sessions SET next_eligible_at = ? WHERE id = ?`,
+		at.UTC(), sessionID,
+	)
+	if err != nil {
+		return fmt.Errorf("store: set next eligible at: %w", err)
+	}
+	return nil
+}
+
 // MarkRecovered is the one single-statement status write that remains.
 // Confirming a payment changes exactly one thing and is driven by a webhook
 // whose own idempotency check sits in the campaign layer, so it does not
 // need the transactional treatment RecordOutcome gives a call's outcome.
 func (db *DB) MarkRecovered(sessionID string) error {
+	// Clearing next_eligible_at is what actually stops the follow-up call.
+	// A recovered customer whose 24-hour nudge timer was still set would
+	// otherwise be phoned about a debt they have already settled.
 	_, err := db.conn.Exec(
-		`UPDATE recovery_sessions SET status = 'recovered', recovered_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		`UPDATE recovery_sessions
+		    SET status = 'recovered',
+		        recovered_at = CURRENT_TIMESTAMP,
+		        next_eligible_at = NULL
+		  WHERE id = ?`,
 		sessionID,
 	)
 	if err != nil {
@@ -410,6 +515,68 @@ func (db *DB) AuditEventsForSession(sessionID string) ([]string, error) {
 		events = append(events, eventType)
 	}
 	return events, rows.Err()
+}
+
+// Queue buckets. A session is due now, waiting for a timer, or finished
+// with — there is no fourth state.
+const (
+	BucketDueNow = "due_now"
+	BucketOnHold = "on_hold"
+	BucketClosed = "closed"
+)
+
+type QueueEntry struct {
+	SessionID          string
+	CustomerName       string
+	OutstandingPaise   int64
+	ProductName        string
+	Status             string
+	Bucket             string
+	ContactAttempts    int
+	MaxContactAttempts int
+	NextEligibleAt     sql.NullTime
+}
+
+// CampaignQueue reports every session in a campaign with the scheduling
+// decision that applies to it. The bucket is computed from the same
+// eligibleNow predicate the assignment query uses, so this view cannot
+// claim someone is due while the assigner disagrees.
+func (db *DB) CampaignQueue(campaignID string) ([]QueueEntry, error) {
+	rows, err := db.conn.Query(
+		`SELECT rs.id, rs.customer_name, rs.outstanding_paise, rs.product_name,
+		        rs.status, rs.contact_attempts, rs.max_contact_attempts,
+		        rs.next_eligible_at,
+		        CASE
+		          WHEN `+eligibleNow+` THEN '`+BucketDueNow+`'
+		          WHEN rs.next_eligible_at IS NOT NULL
+		               AND rs.contact_attempts < rs.max_contact_attempts
+		               AND rs.status IN ('pending', 'unclear', 'link_sent', 'promised')
+		            THEN '`+BucketOnHold+`'
+		          ELSE '`+BucketClosed+`'
+		        END AS bucket
+		   FROM recovery_sessions rs
+		  WHERE rs.campaign_id = ?
+		  ORDER BY rs.next_eligible_at ASC, rs.created_at ASC`,
+		campaignID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("store: campaign queue: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []QueueEntry
+	for rows.Next() {
+		var e QueueEntry
+		if err := rows.Scan(
+			&e.SessionID, &e.CustomerName, &e.OutstandingPaise, &e.ProductName,
+			&e.Status, &e.ContactAttempts, &e.MaxContactAttempts,
+			&e.NextEligibleAt, &e.Bucket,
+		); err != nil {
+			return nil, fmt.Errorf("store: scan queue entry: %w", err)
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }
 
 type Metrics struct {

@@ -37,7 +37,7 @@ var ErrNoActiveCampaign = errors.New("campaign: no active campaign to attach thi
 const systemPromptTemplate = `You are Priya. You work for a Razorpay merchant and you are on a live
 phone call right now with that merchant's customer.
 
-You are calling {{.CustomerName}}. They owe ₹{{.AmountFormatted}} for
+You are calling {{.CustomerName}}. They owe {{.AmountFormatted}} rupees for
 {{.ProductName}}, which was due on {{.DueDate}} and is still unpaid.
 
 How to speak:
@@ -61,6 +61,7 @@ Rules:
   sent to your registered number shortly."
 - If they give a date, repeat that date back to confirm it.
 - If they refuse, say "I understand, thank you for your time." and stop asking.
+- Say amounts as "4,200 rupees", never with a currency symbol or "Rs."
 - State the amount once. Do not repeat it in every reply.
 - Do not thank them and close until the call is actually ending.
 - {{.DueDate}} is already past. Never offer it as a date they could pay on.
@@ -182,6 +183,16 @@ const (
 // unclear is included deliberately: it means the classifier reached no
 // verdict, and correcting that by hand is a documented operator action
 // (see docs/demo.md), not a duplicate.
+// followUpCooldown is how long Vasuli waits before calling a customer back
+// when the last call did not settle anything.
+//
+// It is 24 hours because that is exactly how long a generated payment link
+// lives (see razorpay.linkValidity). By the time the cooldown expires the
+// old link is dead at Razorpay's end, so the follow-up call is not chasing
+// someone who already has a working link — it exists to issue a new one.
+// Changing one of these two numbers without the other breaks that property.
+const followUpCooldown = 24 * time.Hour
+
 var endSessionAllowedStatuses = []string{store.StatusActive, store.StatusUnclear}
 
 var endSessionAllowedFrom = map[string]bool{
@@ -263,10 +274,17 @@ func (m *Manager) buildOutcomeWrite(
 		},
 	}
 
+	followUp := time.Now().UTC().Add(followUpCooldown)
+
 	switch outcome {
 	case OutcomeAgreed:
+		// A link was sent but nothing is paid yet. The follow-up lands once
+		// the link has expired, so calling back is not nagging — the
+		// customer genuinely needs a fresh one. Payment confirmation clears
+		// this timer; see store.MarkRecovered.
 		write.Status = store.StatusLinkSent
 		write.RazorpayLinkID = link.ID
+		write.NextEligibleAt = &followUp
 		write.Events = append(write.Events, store.AuditEvent{
 			Type: "payment_link_sent",
 			Data: map[string]any{
@@ -279,28 +297,63 @@ func (m *Manager) buildOutcomeWrite(
 	case OutcomePromised:
 		write.Status = store.StatusPromised
 		write.PromiseDate = promiseDate
+		write.NextEligibleAt = promisedFollowUp(promiseDate, followUp)
 		write.Events = append(write.Events, store.AuditEvent{
 			Type: "promise_logged",
-			Data: map[string]any{"promise_date": promiseDate},
+			Data: map[string]any{
+				"promise_date":     promiseDate,
+				"next_eligible_at": write.NextEligibleAt,
+			},
 		})
 
 	case OutcomeRefused:
+		// Not a dead end: a customer who disputes the debt has moved past
+		// what an automated agent should handle, and is handed to a human.
+		// Vasuli stops contacting them permanently, hence a nil follow-up.
 		write.Status = store.StatusRefused
-		write.Events = append(write.Events, store.AuditEvent{Type: "stopped_refused"})
+		write.NextEligibleAt = nil
+		write.Events = append(write.Events, store.AuditEvent{
+			Type: "stopped_refused",
+			Data: map[string]any{"escalated_to": "human agent"},
+		})
 
 	default:
 		// UNCLEAR, and anything unrecognised. A session that has used up its
-		// contact budget is failed permanently rather than left eligible for
-		// another call, per the stopping rules in docs/architecture.md.
+		// contact budget is stopped permanently rather than left eligible,
+		// per the stopping rules in docs/architecture.md.
 		if sess.ContactAttempts >= sess.MaxContactAttempts {
 			write.Status = store.StatusFailed
+			write.NextEligibleAt = nil
 			write.Events = append(write.Events, store.AuditEvent{Type: "stopped_max_attempts"})
 		} else {
 			write.Status = store.StatusUnclear
+			write.NextEligibleAt = &followUp
 		}
 	}
 
 	return write
+}
+
+// promisedFollowUp honours a date the customer named, falling back to the
+// standard cooldown.
+//
+// The fallback is the common case today, not the exception: outcome
+// classification returns a single word and never extracts a date, so
+// promiseDate is only populated when an operator supplies one by hand.
+// A promise whose date we could not capture still deserves a follow-up
+// rather than silence.
+func promisedFollowUp(promiseDate string, fallback time.Time) *time.Time {
+	parsed, err := time.Parse("2006-01-02", promiseDate)
+	if err != nil {
+		return &fallback
+	}
+
+	// A date already in the past means the promise is due now.
+	if parsed.Before(fallback) {
+		now := time.Now().UTC()
+		return &now
+	}
+	return &parsed
 }
 
 // ErrSessionNotFound reports a webhook that refers to a session this system
