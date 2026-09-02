@@ -1,5 +1,7 @@
 # Build Log
 
+> To make this project i followed scrum approach where each of the milestone was broken down into tasks and completed iteratively. the roadmap of milestones and tasks was documented in [`roadmap.md`](roadmap.md).
+
 A dated, honest record of what broke while building Vasuli, why, and how it
 got fixed. This is not a polished retelling - entries are written close to
 when the thing actually happened, in the order it happened, including the
@@ -451,12 +453,12 @@ automatic.
 
 The actual gap was the opposite. **Nobody ever came back.** Every outcome
 was a one-way door, which is wrong for the case that matters most: a
-customer who asks for two days should be called *in two days*, not
+customer who asks for two days should be called _in two days_, not
 abandoned. A promise nobody follows up on is not a recovery workflow, it
 is a single call with extra steps. The `cooldown = 24h` rule described in
 `architecture.md` since M2 had never been implemented either.
 
-So eligibility stopped being a status check and became a status *and time*
+So eligibility stopped being a status check and became a status _and time_
 check, with `next_eligible_at` written at the moment each outcome is
 recorded.
 
@@ -481,7 +483,7 @@ recoverable, and visible in the queue view as `closed`.
 
 ### Two locks on the one door that matters
 
-The eligibility predicate checks status *as well as* the timestamp, which
+The eligibility predicate checks status _as well as_ the timestamp, which
 is redundant when every write path is correct. It is kept because the demo
 edits this column by hand to fast-forward a cooldown, and that `UPDATE`
 touches every row in the table. Without the status check, one hand-edit
@@ -513,7 +515,7 @@ unit keeps floating point out of currency arithmetic entirely.
 ### A currency symbol that would have broken the sentence chunker
 
 The plan was to replace `₹` with `Rs.` for clearer pronunciation. Testing
-against Piper showed `Rs. 4,200` takes *longer* to speak than
+against Piper showed `Rs. 4,200` takes _longer_ to speak than
 `4,200 rupees`, which suggests the abbreviation is being spelled out rather
 than read as a word.
 
