@@ -269,7 +269,12 @@ CREATE TABLE campaigns (
 );
 
 -- One row per customer per recovery attempt.
--- status lifecycle: pending → active → recovered | promised | refused | no_answer | failed
+-- status lifecycle: pending → active → link_sent | promised | unclear | refused | failed
+--                   link_sent → recovered (on payment confirmation)
+--
+-- There is no no_answer status. The transport is a browser session the
+-- customer joins, so a call is never unanswered; a metric that can only
+-- ever be zero is worse than no metric.
 CREATE TABLE recovery_sessions (
     id                   TEXT PRIMARY KEY,     -- UUID (internal recovery ID)
     campaign_id          TEXT NOT NULL REFERENCES campaigns(id),
@@ -311,17 +316,49 @@ CREATE INDEX idx_audit_log_session ON audit_log(session_id);
 
 ---
 
-## Stopping Rules
+## Scheduling and Stopping Rules
 
-The Recovery Orchestrator enforces these rules before popping any session from the pending queue. A session that fails any rule is skipped and its status updated accordingly.
+A call is never "finished with" a customer — it decides **when, if ever, to
+call them again**. That decision is written to `next_eligible_at` at the
+moment the outcome is recorded, and one predicate governs every assignment:
 
-| Rule              | Condition                                  | Action                                          |
-| ----------------- | ------------------------------------------ | ----------------------------------------------- |
-| Max attempts      | `contact_attempts >= max_contact_attempts` | Set status=`failed`, log `stopped_max_attempts` |
-| Cooldown          | Last attempt within 24 hours               | Skip this cycle, retry next run                 |
-| Explicit refusal  | `status = 'refused'`                       | Permanently skip, log `stopped_refused`         |
-| Already recovered | `status = 'recovered'`                     | Permanently skip                                |
-| Campaign paused   | `campaign.status != 'active'`              | Skip all sessions in campaign                   |
+```sql
+next_eligible_at IS NOT NULL          -- NULL means never again
+AND next_eligible_at <= CURRENT_TIMESTAMP
+AND contact_attempts < max_contact_attempts
+AND status IN ('pending', 'unclear', 'link_sent', 'promised')
+```
+
+`store.eligibleNow` is that predicate, and both the assignment query and the
+queue view read from it — so the system cannot report someone as due while
+the assigner skips them.
+
+| Outcome | Next contact | Reasoning |
+| ------- | ------------ | --------- |
+| Never called | immediately | — |
+| `UNCLEAR` | +24h | no verdict reached; worth another attempt |
+| `AGREED`, link unpaid | +24h | the link has expired by then, so a fresh one is needed |
+| `PROMISED` | the promised date, else +24h | the customer set the terms |
+| `REFUSED` | **never** | escalated to a human agent |
+| Payment confirmed | **never** | `next_eligible_at` is cleared |
+| Attempts exhausted | **never** | the workflow is bounded |
+| Campaign paused | skipped | `campaign.status != 'active'` |
+
+**The 24-hour cooldown is not an arbitrary constant.** It equals
+`razorpay.linkValidity`, the lifetime of a generated payment link. The
+follow-up therefore lands exactly when the old link dies, so calling back
+is not nagging someone who already holds a working link — it exists to
+issue a new one. Changing one number without the other breaks that.
+
+**`refused` is a handoff, not an abandonment.** A customer disputing the
+debt has moved past what an automated agent should handle, so Vasuli stops
+permanently and the account belongs to a human. Metrics report this as
+`escalated_to_human` rather than `refused`.
+
+Two independent things must both hold for a customer to be called, which is
+deliberate: `next_eligible_at` is edited by hand during demos, and the
+status check ensures a stray `UPDATE` cannot revive a customer the system
+promised never to contact again.
 
 ---
 

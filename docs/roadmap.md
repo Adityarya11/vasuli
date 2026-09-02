@@ -391,7 +391,7 @@ asserted against a local stand-in; only the credentials are outstanding.
 
 ---
 
-## M7 — Metrics and Synthetic Batch
+## M7 — Metrics and Synthetic Batch ✅ DONE
 
 **What:** The metrics endpoint returns accurate numbers. A synthetic batch of 20 accounts is loaded and several calls are manually completed to populate realistic data.
 
@@ -423,6 +423,51 @@ asserted against a local stand-in; only the credentials are outstanding.
 20 accounts with realistic Indian names, amounts between ₹2,000–₹25,000, product names across: personal loans, EMIs, subscriptions, utility bills. Mix of due dates in the past 1–3 months.
 
 **Definition of done:** `GET /api/v1/campaigns/aug-emi-2026/metrics` returns real numbers derived from real calls made during testing. The numbers are not hardcoded. Stopped accounts are visible and correctly excluded from further assignment.
+
+### What was actually built (larger than planned)
+
+The milestone as written was metrics plus a fixture. Discussing it surfaced
+a genuine gap that mattered more: **every outcome was a one-way door.** A
+customer who asked for two days was never called back, because eligibility
+was `status = 'pending'` and no outcome returns a session to that state.
+A promise nobody follows up on is not a recovery workflow.
+
+So M7 became the scheduler. `next_eligible_at` is written when each outcome
+is recorded, and one predicate — `store.eligibleNow` — governs assignment:
+
+| Outcome | Next contact |
+| ------- | ------------ |
+| `UNCLEAR` | +24h |
+| `AGREED`, link unpaid | +24h, exactly when the link expires |
+| `PROMISED` | the promised date, else +24h |
+| `REFUSED` | never — escalated to a human agent |
+| Payment confirmed | never — follow-up cancelled |
+| Attempts exhausted | never |
+
+`GET /api/v1/campaigns/{id}/queue` renders this as due / on hold / closed,
+reading from the same predicate so the view cannot disagree with the
+assigner.
+
+Also in scope, and departing from the plan above:
+
+- **`no_answer` deleted rather than implemented.** The transport is a
+  browser session the customer joins, so no call is ever unanswered. A
+  metric that can only be zero invites a question with no good answer.
+- **Amounts are entered in rupees**, converted to paise once at the API
+  boundary. Storage and Razorpay calls stay in paise.
+- **Metrics report `escalated_to_human`, not `refused`** — the accurate
+  description of what happens to a disputed debt.
+- **Text-format metrics dropped.** Pretty-printing is not what
+  "batch-level results" asks for.
+
+**Verified live:** fresh account due now → UNCLEAR → on hold with a
+timestamp → clock moved → due again at attempt 1 of 3 → AGREED → link sent,
+follow-up armed → payment confirmed → closed, follow-up cleared. A blanket
+`UPDATE` of every `next_eligible_at` failed to revive the closed customer.
+
+67 test cases across four packages.
+
+**Status: Complete**, pending the 20-account fixture and calls to populate it.
 
 ---
 

@@ -131,8 +131,15 @@ spoke too early (see Step 2).
 
 ```powershell
 cd E:\APPLICATIONS\CODING\project\vasuli\recovery-orchestrator
-curl.exe -s -X POST http://localhost:8090/api/v1/campaigns -H "Content-Type: application/json" -d "@testdata/m3_smoke_test.json"
+curl.exe -s -X POST http://localhost:8090/api/v1/campaigns -H "Content-Type: application/json" -d "@testdata/sample_campaign.json"
 ```
+
+Use `m3_smoke_test.json` instead for a single-account run.
+
+Amounts in the fixture are **whole rupees** (`"outstanding_rupees": 4200`).
+They are stored and sent to Razorpay as paise, because money belongs in an
+integer count of the smallest unit — the conversion happens once, at the
+API boundary.
 
 ```json
 {"campaign_id":"camp_...","name":"M3 Smoke Test","total":1,"status":"active",...}
@@ -147,6 +154,27 @@ in `recovery-orchestrator/`; the `@` path is relative.
 leaves the queue empty, at which point the agent falls back to the static
 profile and never mentions the customer. If a call comes through
 generically, re-run this command.
+
+## Step 1b — Show who the system decided to call
+
+```powershell
+curl.exe -s http://localhost:8090/api/v1/campaigns/camp_XXXXXXXX/queue
+```
+
+```json
+{
+  "due_now": [
+    {"customer_name":"Rahul Sharma","outstanding_rupees":4200,"attempt":"0 of 3","status":"pending"}
+  ],
+  "on_hold": [],
+  "closed": []
+}
+```
+
+This is the outbound decision made visible: **the system selected this
+customer**, before any call exists. Worth showing before the call rather
+than after, because it is what makes the workflow outbound-shaped even
+though the transport is a browser session the customer joins.
 
 ## Step 2 — The live call
 
@@ -294,6 +322,59 @@ returns `campaign not found`.
 ```
 
 `recovered: 0` here means Step 5 did not land.
+
+---
+
+## Step 7 — Follow-up scheduling, and fast-forwarding the clock
+
+This is the part that makes it an orchestration rather than a call script.
+Every outcome decides **when the customer may be contacted again**:
+
+```powershell
+curl.exe -s http://localhost:8090/api/v1/campaigns/camp_XXXXXXXX/queue
+```
+
+```json
+{
+  "due_now": [ ... ],
+  "on_hold": [
+    {"customer_name":"Preethi Nair","status":"unclear","next_eligible_at":"2026-09-03T14:22:00Z"},
+    {"customer_name":"Rahul Sharma","status":"link_sent","next_eligible_at":"2026-09-03T15:04:00Z"}
+  ],
+  "closed": [
+    {"customer_name":"Vikram Rao","status":"refused","reason":"escalated to human agent"}
+  ]
+}
+```
+
+| Outcome | Next contact |
+| ------- | ------------ |
+| `UNCLEAR` | +24h |
+| `AGREED`, link unpaid | +24h — *exactly when the link expires* |
+| `PROMISED` | the promised date, else +24h |
+| `REFUSED` | never — escalated to a human |
+| Payment confirmed | never — the follow-up is cancelled |
+| 3 attempts used | never |
+
+**Fast-forwarding, on camera.** A 24-hour cooldown cannot be waited out in
+a demo, so move the clock instead. Stop the services, run one `UPDATE`, and
+restart:
+
+```bash
+sqlite3 /e/APPLICATIONS/CODING/project/vasuli/recovery-orchestrator/vasuli.db \
+  "UPDATE recovery_sessions
+      SET next_eligible_at = datetime('now','-1 hour')
+    WHERE status IN ('unclear','promised','link_sent');"
+```
+
+Re-check the queue: everyone on hold is now `due_now`, with `attempt`
+incremented. This is honest — no outcome is fabricated, only a timestamp
+moved, and the audit trail still shows exactly what really happened.
+
+**Worth saying while you do it:** that `UPDATE` deliberately touches every
+row, including escalated and recovered ones. They stay `closed` regardless,
+because eligibility checks status as well as time. A single hand-edit
+cannot re-contact someone the system promised never to call again.
 
 ---
 

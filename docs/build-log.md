@@ -436,3 +436,90 @@ Vasuli generates payment demands autonomously from an AI conversation;
 the gap between test and live mode is one CLI flag, and the failure mode
 of getting it wrong is real payment requests to real people. That is
 worth enforcing in code rather than trusting to whoever types the command.
+
+---
+
+## 2026-09-02 — M7: the queue learns to wait
+
+### The half of the workflow that was missing
+
+The assumption going in was that customers needed removing from the queue
+after a call. They did not: `AssignNextPending` only ever selected
+`status = 'pending'`, and no outcome leaves a session in that state, so a
+called customer could never be picked twice. That part was already
+automatic.
+
+The actual gap was the opposite. **Nobody ever came back.** Every outcome
+was a one-way door, which is wrong for the case that matters most: a
+customer who asks for two days should be called *in two days*, not
+abandoned. A promise nobody follows up on is not a recovery workflow, it
+is a single call with extra steps. The `cooldown = 24h` rule described in
+`architecture.md` since M2 had never been implemented either.
+
+So eligibility stopped being a status check and became a status *and time*
+check, with `next_eligible_at` written at the moment each outcome is
+recorded.
+
+### The cooldown is load-bearing
+
+24 hours is not a round number picked for feel. It equals
+`razorpay.linkValidity`, the lifetime of a generated payment link. That
+makes the follow-up land exactly when the old link dies, so calling back an
+`AGREED` customer who has not paid is not nagging someone holding a working
+link — the link is gone, and the call exists to issue a new one. The
+constant carries a comment saying changing one without the other breaks the
+property.
+
+### NULL means never, and that direction was chosen deliberately
+
+`next_eligible_at IS NULL` means no further contact: recovered, escalated,
+or out of attempts. The alternative — defaulting to "now" and marking
+terminal states some other way — fails in the dangerous direction. A code
+path that forgets to set the column would contact someone forever. With
+NULL as the default meaning, forgetting leaves a customer uncontacted:
+recoverable, and visible in the queue view as `closed`.
+
+### Two locks on the one door that matters
+
+The eligibility predicate checks status *as well as* the timestamp, which
+is redundant when every write path is correct. It is kept because the demo
+edits this column by hand to fast-forward a cooldown, and that `UPDATE`
+touches every row in the table. Without the status check, one hand-edit
+would re-contact a customer who had disputed the debt and been escalated to
+a human — precisely the failure stopping rules exist to prevent.
+
+Verified live rather than assumed: a blanket
+`UPDATE recovery_sessions SET next_eligible_at = datetime('now','-1 hour')`
+left a recovered customer sitting in `closed`, and the next assignment
+returned nothing.
+
+### "Refused" was the wrong word
+
+The status stays `refused` in the database, but every human-facing surface
+now says **escalated to a human agent**. That is what actually happens: a
+disputed debt has outgrown what an automated agent should handle, so it is
+handed over rather than dropped. Same data, and a materially better answer
+when a judge asks what the system does with someone who says no.
+
+### Rupees at the boundary, paise everywhere else
+
+Fixtures now carry `"outstanding_rupees": 4200` instead of
+`"outstanding_paise": 420000`, because a human writes them and the second
+form is easy to get wrong by a factor of a hundred. The conversion happens
+once, in the API handler. Storage and every Razorpay call stay in paise:
+that is what Razorpay's API expects, and an integer count of the smallest
+unit keeps floating point out of currency arithmetic entirely.
+
+### A currency symbol that would have broken the sentence chunker
+
+The plan was to replace `₹` with `Rs.` for clearer pronunciation. Testing
+against Piper showed `Rs. 4,200` takes *longer* to speak than
+`4,200 rupees`, which suggests the abbreviation is being spelled out rather
+than read as a word.
+
+The decisive problem was elsewhere. `Rs.` ends in a period, and the LLM
+sentence chunker splits on `[.!?]` past its 8-character minimum — so
+`"The amount is Rs."` and `"4,200."` would have become separate TTS chunks,
+putting a pause between the currency and the number. The same defect
+already documented for `Mr.`. Spelling out "rupees" avoids the symbol, the
+abbreviation, and the chunker, and has exactly one pronunciation.
