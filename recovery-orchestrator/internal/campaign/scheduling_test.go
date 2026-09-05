@@ -9,9 +9,8 @@ import (
 )
 
 // backdate simulates the passage of time by moving a session's follow-up
-// timer into the past. This is the same edit the demo performs on camera,
-// and it is the only way to exercise a 24-hour cooldown in a test that
-// finishes in milliseconds.
+// timer into the past. It is the only way to exercise a 24-hour cooldown in
+// a test that has to finish in milliseconds.
 func backdate(t *testing.T, db *store.DB, sessionID string) {
 	t.Helper()
 	if err := db.SetNextEligibleAt(sessionID, time.Now().UTC().Add(-time.Hour)); err != nil {
@@ -317,5 +316,64 @@ func TestQueueViewMatchesWhatIsActuallyAssigned(t *testing.T) {
 	}
 	if assigned.ID != due[0] {
 		t.Errorf("queue said %s was due, assigner handed out %s", due[0], assigned.ID)
+	}
+}
+
+// A promised date inside the next 24 hours must schedule the callback for
+// that date, not for immediately.
+//
+// This is a regression test for a real bug. promisedFollowUp compared the
+// parsed date against the 24-hour fallback rather than against the present
+// moment, so any date less than a day away looked like it had already
+// passed and the customer became contactable at once. Someone who said
+// "I will pay tomorrow" would have been called back within seconds of
+// hanging up, which is the exact behaviour the scheduling layer exists to
+// prevent. Verified by reverting the comparison and confirming this fails.
+func TestPromiseTomorrowIsNotDueImmediately(t *testing.T) {
+	m, db, _ := newTestManager(t)
+	if _, err := m.CreateCampaign("Batch", sampleAccounts(1)); err != nil {
+		t.Fatalf("create campaign: %v", err)
+	}
+	sess := assignAndGet(t, m, db, "call_1")
+
+	tomorrow := time.Now().UTC().Add(20 * time.Hour).Format("2006-01-02")
+	if err := m.EndSession(context.Background(), "call_1", OutcomePromised, tomorrow); err != nil {
+		t.Fatalf("promised: %v", err)
+	}
+
+	at, ok := nextEligible(t, db, sess.ID)
+	if !ok {
+		t.Fatal("a promised session must keep a follow-up scheduled")
+	}
+	if !at.After(time.Now().UTC()) {
+		t.Errorf("next_eligible_at = %s, want a future time; the customer was made contactable immediately", at)
+	}
+
+	// The assigner must agree with the stored timestamp.
+	if again, err := m.AssignSession("call_2"); err != nil || again != nil {
+		t.Errorf("a customer who promised to pay tomorrow was assigned again today: session=%v err=%v", again, err)
+	}
+}
+
+// A promised date already in the past means the promise has come due, so
+// the customer is contactable now rather than waiting a further cooldown.
+func TestPromiseInThePastIsDueNow(t *testing.T) {
+	m, db, _ := newTestManager(t)
+	if _, err := m.CreateCampaign("Batch", sampleAccounts(1)); err != nil {
+		t.Fatalf("create campaign: %v", err)
+	}
+	sess := assignAndGet(t, m, db, "call_1")
+
+	yesterday := time.Now().UTC().Add(-24 * time.Hour).Format("2006-01-02")
+	if err := m.EndSession(context.Background(), "call_1", OutcomePromised, yesterday); err != nil {
+		t.Fatalf("promised: %v", err)
+	}
+
+	at, ok := nextEligible(t, db, sess.ID)
+	if !ok {
+		t.Fatal("a promised session must keep a follow-up scheduled")
+	}
+	if at.After(time.Now().UTC()) {
+		t.Errorf("next_eligible_at = %s, want a time already reached; an elapsed promise should be actionable", at)
 	}
 }

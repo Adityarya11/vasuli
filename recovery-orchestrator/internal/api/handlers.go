@@ -62,8 +62,8 @@ type createAccountRequest struct {
 }
 
 type createCampaignRequest struct {
-	Name     string                  `json:"name"`
-	Accounts []createAccountRequest  `json:"accounts"`
+	Name     string                 `json:"name"`
+	Accounts []createAccountRequest `json:"accounts"`
 }
 
 type createCampaignResponse struct {
@@ -121,12 +121,12 @@ type assignRequest struct {
 // assignResponse mirrors the SessionContext shape var-thon's recovery
 // client unmarshals into (internal/recovery/client.go in var-thon).
 type assignResponse struct {
-	SessionID               string `json:"session_id"`
-	CustomerName             string `json:"customer_name"`
-	OutstandingAmountPaise   int64  `json:"outstanding_amount_paise"`
-	ProductName              string `json:"product_name"`
-	DueDate                  string `json:"due_date"`
-	SystemPrompt             string `json:"system_prompt"`
+	SessionID              string `json:"session_id"`
+	CustomerName           string `json:"customer_name"`
+	OutstandingAmountPaise int64  `json:"outstanding_amount_paise"`
+	ProductName            string `json:"product_name"`
+	DueDate                string `json:"due_date"`
+	SystemPrompt           string `json:"system_prompt"`
 }
 
 func (h *Handlers) AssignCall(w http.ResponseWriter, r *http.Request) {
@@ -155,7 +155,7 @@ func (h *Handlers) AssignCall(w http.ResponseWriter, r *http.Request) {
 		req.CallSessionID, sess.ID, sess.CustomerName)
 
 	writeJSON(w, http.StatusOK, assignResponse{
-		SessionID:             sess.ID,
+		SessionID:              sess.ID,
 		CustomerName:           sess.CustomerName,
 		OutstandingAmountPaise: sess.OutstandingPaise,
 		ProductName:            sess.ProductName,
@@ -257,14 +257,14 @@ func (h *Handlers) CampaignMetrics(w http.ResponseWriter, r *http.Request) {
 // --- GET /api/v1/campaigns/{id}/queue ---
 
 type queueEntryResponse struct {
-	SessionID        string `json:"session_id"`
-	CustomerName     string `json:"customer_name"`
-	OutstandingRupees int64 `json:"outstanding_rupees"`
-	ProductName      string `json:"product_name"`
-	Status           string `json:"status"`
-	Attempt          string `json:"attempt"`
-	NextEligibleAt   string `json:"next_eligible_at,omitempty"`
-	Reason           string `json:"reason,omitempty"`
+	SessionID         string `json:"session_id"`
+	CustomerName      string `json:"customer_name"`
+	OutstandingRupees int64  `json:"outstanding_rupees"`
+	ProductName       string `json:"product_name"`
+	Status            string `json:"status"`
+	Attempt           string `json:"attempt"`
+	NextEligibleAt    string `json:"next_eligible_at,omitempty"`
+	Reason            string `json:"reason,omitempty"`
 }
 
 // CampaignQueue answers "who does the system call next, and who is it

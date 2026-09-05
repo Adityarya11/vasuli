@@ -1,0 +1,18 @@
+# Normalize all text to LF in the repository. Without this, files written by
+# Windows tooling land as CRLF, which shows up as a whole-file diff on every
+# other platform and makes gofmt report sources that are actually unchanged.
+* text=auto eol=lf
+
+# Binary assets, never touched.
+*.db binary
+*.onnx binary
+*.wav binary
+*.raw binary
+*.png binary
+*.jpg binary
+
+# Generated protobuf bindings. Marked so review tooling collapses them and
+# so nobody edits them by hand; the .proto file is the source.
+*.pb.go linguist-generated=true
+*_pb2.py linguist-generated=true
+*_pb2_grpc.py linguist-generated=true

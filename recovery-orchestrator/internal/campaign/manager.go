@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -164,25 +165,12 @@ func (m *Manager) AssignSession(callSessionID string) (*store.RecoverySession, e
 }
 
 const (
-	OutcomeAgreed  = "AGREED"
+	OutcomeAgreed   = "AGREED"
 	OutcomePromised = "PROMISED"
-	OutcomeRefused = "REFUSED"
-	OutcomeUnclear = "UNCLEAR"
+	OutcomeRefused  = "REFUSED"
+	OutcomeUnclear  = "UNCLEAR"
 )
 
-// endSessionAllowedFrom is the set of statuses an outcome may be recorded
-// from. Everything absent from it is either already settled or terminal.
-//
-// This exists because EndSession has side effects that must not repeat:
-// recording AGREED twice would create a second payment link and duplicate
-// the audit trail. More importantly, without it a session already marked
-// refused could be dragged back into link_sent by a stray or replayed
-// call. Re-engaging a customer who declined, which is exactly what the
-// stopping rules exist to prevent.
-//
-// unclear is included deliberately: it means the classifier reached no
-// verdict, and correcting that by hand is a documented operator action
-// (see docs/demo.md), not a duplicate.
 // followUpCooldown is how long Vasuli waits before calling a customer back
 // when the last call did not settle anything.
 //
@@ -193,11 +181,28 @@ const (
 // Changing one of these two numbers without the other breaks that property.
 const followUpCooldown = 24 * time.Hour
 
-var endSessionAllowedStatuses = []string{store.StatusActive, store.StatusUnclear}
+// endSessionAllowedFrom is the set of statuses an outcome may be recorded
+// from. Everything absent from it is either already settled or terminal.
+//
+// This exists because EndSession has side effects that must not repeat:
+// recording AGREED twice would create a second payment link and duplicate
+// the audit trail. More importantly, without it a session already marked
+// refused could be dragged back into link_sent by a stray or replayed
+// call, re-engaging a customer who declined, which is exactly what the
+// stopping rules exist to prevent.
+//
+// unclear is included deliberately: it means the classifier reached no
+// verdict, so an operator correcting that by hand is completing a decision
+// the system failed to make, not duplicating one it already made.
+//
+// This is the single definition of the rule. It is checked once here, as a
+// fast rejection before any payment provider is called, and again inside
+// RecordOutcome's transaction, which is the check that actually decides.
+// Both reads come from this slice so the two can never disagree.
+var endSessionAllowedFrom = []string{store.StatusActive, store.StatusUnclear}
 
-var endSessionAllowedFrom = map[string]bool{
-	store.StatusActive:  true,
-	store.StatusUnclear: true,
+func outcomeRecordableFrom(status string) bool {
+	return slices.Contains(endSessionAllowedFrom, status)
 }
 
 // ErrOutcomeAlreadyRecorded reports an EndSession against a session whose
@@ -221,7 +226,7 @@ func (m *Manager) EndSession(ctx context.Context, callSessionID, outcome, promis
 		return fmt.Errorf("campaign: no session bound to call_session_id %q", callSessionID)
 	}
 
-	if !endSessionAllowedFrom[sess.Status] {
+	if !outcomeRecordableFrom(sess.Status) {
 		return ErrOutcomeAlreadyRecorded
 	}
 
@@ -245,7 +250,7 @@ func (m *Manager) EndSession(ctx context.Context, callSessionID, outcome, promis
 
 	write := m.buildOutcomeWrite(sess, outcome, promiseDate, link)
 
-	applied, err := m.db.RecordOutcome(write, endSessionAllowedStatuses)
+	applied, err := m.db.RecordOutcome(write, endSessionAllowedFrom)
 	if err != nil {
 		return err
 	}
@@ -342,15 +347,23 @@ func (m *Manager) buildOutcomeWrite(
 // promiseDate is only populated when an operator supplies one by hand.
 // A promise whose date we could not capture still deserves a follow-up
 // rather than silence.
+//
+// A promised date is compared against the present moment, not against the
+// fallback. Comparing against the fallback was a bug: the fallback is 24
+// hours in the future, so every date inside the next day looked "already
+// past" and scheduled the callback for immediately. A customer who said
+// they would pay tomorrow was made contactable at once, which is precisely
+// the behaviour the whole scheduling layer exists to prevent.
 func promisedFollowUp(promiseDate string, fallback time.Time) *time.Time {
 	parsed, err := time.Parse("2006-01-02", promiseDate)
 	if err != nil {
 		return &fallback
 	}
 
-	// A date already in the past means the promise is due now.
-	if parsed.Before(fallback) {
-		now := time.Now().UTC()
+	// A date already gone means the promise has come due and the customer
+	// may be contacted about it now.
+	now := time.Now().UTC()
+	if parsed.Before(now) {
 		return &now
 	}
 	return &parsed
@@ -408,14 +421,21 @@ func (m *Manager) HandlePaymentLinkPaid(razorpayLinkID, razorpayPaymentID string
 // markRecovered reports false when the session was already recovered, so a
 // redelivered webhook neither writes a second audit row nor reads as a
 // second recovery in the logs.
+//
+// Whether the session had already been recovered is decided by the UPDATE
+// itself rather than by the status on the row read a moment ago. Two
+// concurrent deliveries of the same event would both see a stale "not
+// recovered" here, and the audit row is what the confirmed-recovery metric
+// counts, so the check has to be the write.
 func (m *Manager) markRecovered(sess *store.RecoverySession, auditData map[string]any) (bool, error) {
-	if sess.Status == store.StatusRecovered {
+	changed, err := m.db.MarkRecovered(sess.ID)
+	if err != nil {
+		return false, err
+	}
+	if !changed {
 		return false, nil
 	}
 
-	if err := m.db.MarkRecovered(sess.ID); err != nil {
-		return false, err
-	}
 	if err := m.db.InsertAuditLog(sess.ID, "payment_captured", auditData); err != nil {
 		return false, err
 	}
@@ -494,7 +514,16 @@ func (m *Manager) HandlePaymentFailed(payment razorpay.PaymentEntity) (*store.Re
 	}
 
 	created, err := m.db.GetSessionByID(sessionID)
-	return created, true, err
+	if err != nil {
+		return nil, false, err
+	}
+	if created == nil {
+		// Unreachable while the insert above succeeded on the same single
+		// connection, but the read is still a read: returning (nil, true)
+		// would hand the caller a "created" session it can then dereference.
+		return nil, false, fmt.Errorf("campaign: session %q vanished immediately after insert", sessionID)
+	}
+	return created, true, nil
 }
 
 func (m *Manager) Metrics(campaignID string) (*store.Metrics, error) {

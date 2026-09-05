@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"vasuli/recovery-orchestrator/internal/razorpay"
@@ -462,5 +463,61 @@ func TestMetricsReflectOutcomes(t *testing.T) {
 	// Not yet recovered: a link was sent but no payment is confirmed.
 	if metrics.Recovered != 0 {
 		t.Errorf("Recovered = %d, want 0 before payment confirmation", metrics.Recovered)
+	}
+}
+
+// Razorpay delivers webhooks at least once and gives no guarantee that two
+// deliveries of the same event arrive one after the other. This fires them
+// concurrently, which is the case a sequential redelivery test cannot
+// reach.
+//
+// The guard used to be a status check on a session read a moment earlier,
+// so both goroutines could observe "not yet recovered" before either wrote,
+// and both would append a payment_captured row. That row is what the
+// confirmed-recovery metric counts, so the duplicate showed up as a
+// merchant being told two payments landed when one did. The status is now
+// part of the UPDATE's WHERE clause, which makes the database the arbiter.
+func TestHandlePaymentLinkPaidConcurrentDeliveries(t *testing.T) {
+	m, db, _ := newTestManager(t)
+	if _, err := m.CreateCampaign("Batch", sampleAccounts(1)); err != nil {
+		t.Fatalf("create campaign: %v", err)
+	}
+	assignAndGet(t, m, db, "call_1")
+	if err := m.EndSession(context.Background(), "call_1", OutcomeAgreed, ""); err != nil {
+		t.Fatalf("end session: %v", err)
+	}
+
+	sess, _ := db.GetSessionByCallSessionID("call_1")
+	linkID := sess.RazorpayLinkID.String
+
+	const deliveries = 8
+	var (
+		wg        sync.WaitGroup
+		mu        sync.Mutex
+		recovered int
+	)
+	for i := 0; i < deliveries; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := m.HandlePaymentLinkPaid(linkID, "pay_unrelated")
+			if err != nil {
+				t.Errorf("delivery: %v", err)
+				return
+			}
+			if ok {
+				mu.Lock()
+				recovered++
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+
+	if recovered != 1 {
+		t.Errorf("%d of %d concurrent deliveries reported a recovery, want exactly 1", recovered, deliveries)
+	}
+	if n := countAudit(t, db, sess.ID, "payment_captured"); n != 1 {
+		t.Errorf("payment_captured audit rows = %d, want 1; the confirmed-recovery metric counts these", n)
 	}
 }

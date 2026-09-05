@@ -71,8 +71,24 @@ func main() {
 	handlers := api.NewHandlers(manager, db, *webhookSecret)
 	router := api.NewRouter(handlers)
 
+	// http.ListenAndServe would leave every timeout at its zero value, which
+	// means no timeout at all: a client that opens a connection and sends a
+	// request slowly, or never finishes sending one, holds a goroutine and a
+	// file descriptor for as long as it likes. The webhook endpoint is the
+	// one an unauthenticated caller can reach, so the read side matters most.
+	// The write timeout is generous because a payment-link call to Razorpay
+	// happens inside the end-of-call request and is itself bounded at 10s.
+	server := &http.Server{
+		Addr:              *port,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+
 	logInfo("Recovery Orchestrator listening on %s (db: %s, razorpay: %s)", *port, *dbPath, mode)
-	if err := http.ListenAndServe(*port, router); err != nil {
+	if err := server.ListenAndServe(); err != nil {
 		logFatal("Server failed: %v", err)
 	}
 }

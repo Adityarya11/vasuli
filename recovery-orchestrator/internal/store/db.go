@@ -238,19 +238,33 @@ func (db *DB) GetCampaign(id string) (*Campaign, error) {
 	return &c, nil
 }
 
-// eligibleNow is the single definition of "may be contacted". Both the
-// assignment query and the queue view read from it, so the scheduling rule
-// cannot drift between what the system does and what it reports.
+// stillContactable is true for a session the stopping rules have not closed
+// out: a follow-up is scheduled, attempts remain, and the status is one a
+// further call is allowed from. It says nothing about whether that call is
+// due yet.
 //
-// The status list is redundant with next_eligible_at when every write path
-// is correct, and is kept deliberately: this column gets edited by hand
-// during demos, and a stray UPDATE that caught an escalated row would
-// re-contact a customer the system promised never to call again.
-const eligibleNow = `
+// The status list is redundant with next_eligible_at as long as every write
+// path is correct, and is kept anyway. This column is the one an operator
+// is most likely to edit by hand, and a stray UPDATE that swept up an
+// escalated row would otherwise re-contact a customer the system promised
+// never to call again. The status check makes that impossible to do by
+// accident.
+const stillContactable = `
 	rs.next_eligible_at IS NOT NULL
-	AND rs.next_eligible_at <= CURRENT_TIMESTAMP
 	AND rs.contact_attempts < rs.max_contact_attempts
 	AND rs.status IN ('pending', 'unclear', 'link_sent', 'promised')`
+
+// eligibleNow is the single definition of "may be contacted right now".
+// Both the assignment query and the queue view read from it, so the
+// scheduling rule cannot drift between what the system does and what it
+// reports to an operator.
+//
+// It is composed from stillContactable rather than restating those clauses,
+// because the queue view needs the two halves separately: a session that is
+// contactable but not yet due is on hold, and one that is not contactable
+// at all is closed. Written out twice, the two would eventually disagree.
+const eligibleNow = stillContactable + `
+	AND rs.next_eligible_at <= CURRENT_TIMESTAMP`
 
 // AssignNextPending atomically claims the longest-waiting eligible session
 // belonging to an active campaign and binds it to callSessionID. Returns
@@ -457,11 +471,14 @@ func (db *DB) RecordOutcome(w OutcomeWrite, allowedFrom []string) (bool, error) 
 }
 
 // SetNextEligibleAt reschedules a follow-up. It writes the timestamp and
-// nothing else. It does not check whether the session should ever be
+// nothing else.
+//
+// It deliberately does not check whether the session should ever be
 // contacted again, because that judgement belongs to the eligibleNow
-// predicate. A session escalated to a human stays out of the queue even
-// with a timer set, which is what makes hand-editing this column during a
-// demo safe.
+// predicate and duplicating it here would create a second place for the
+// stopping rules to live. A session escalated to a human stays out of the
+// queue even with a timer set on it, which is what makes moving this
+// column safe to do by hand.
 func (db *DB) SetNextEligibleAt(sessionID string, at time.Time) error {
 	_, err := db.conn.Exec(
 		`UPDATE recovery_sessions SET next_eligible_at = ? WHERE id = ?`,
@@ -473,26 +490,39 @@ func (db *DB) SetNextEligibleAt(sessionID string, at time.Time) error {
 	return nil
 }
 
-// MarkRecovered is the one single-statement status write that remains.
-// Confirming a payment changes exactly one thing and is driven by a webhook
-// whose own idempotency check sits in the campaign layer, so it does not
-// need the transactional treatment RecordOutcome gives a call's outcome.
-func (db *DB) MarkRecovered(sessionID string) error {
+// MarkRecovered confirms payment for a session and reports whether this
+// call is the one that changed it. False means the session was already
+// recovered and nothing was written.
+//
+// The status guard lives in the UPDATE rather than in a preceding SELECT
+// because webhook delivery is at-least-once and Razorpay may deliver the
+// same event twice concurrently. A read-then-write pair in the caller can
+// have both deliveries observe "not yet recovered" before either writes,
+// and both would then append a payment_captured row. That inflates the
+// confirmed-recovery metric, which counts those rows. Making the status
+// part of the WHERE clause means the database decides, and exactly one
+// delivery can win.
+func (db *DB) MarkRecovered(sessionID string) (bool, error) {
 	// Clearing next_eligible_at is what actually stops the follow-up call.
 	// A recovered customer whose 24-hour nudge timer was still set would
 	// otherwise be phoned about a debt they have already settled.
-	_, err := db.conn.Exec(
+	res, err := db.conn.Exec(
 		`UPDATE recovery_sessions
 		    SET status = 'recovered',
 		        recovered_at = CURRENT_TIMESTAMP,
 		        next_eligible_at = NULL
-		  WHERE id = ?`,
+		  WHERE id = ? AND status != 'recovered'`,
 		sessionID,
 	)
 	if err != nil {
-		return fmt.Errorf("store: mark recovered: %w", err)
+		return false, fmt.Errorf("store: mark recovered: %w", err)
 	}
-	return nil
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: mark recovered rows affected: %w", err)
+	}
+	return affected > 0, nil
 }
 
 // InsertAuditLog writes one immutable event row. eventData is marshaled to
@@ -582,10 +612,7 @@ func (db *DB) CampaignQueue(campaignID string) ([]QueueEntry, error) {
 		        rs.next_eligible_at,
 		        CASE
 		          WHEN `+eligibleNow+` THEN '`+BucketDueNow+`'
-		          WHEN rs.next_eligible_at IS NOT NULL
-		               AND rs.contact_attempts < rs.max_contact_attempts
-		               AND rs.status IN ('pending', 'unclear', 'link_sent', 'promised')
-		            THEN '`+BucketOnHold+`'
+		          WHEN `+stillContactable+` THEN '`+BucketOnHold+`'
 		          ELSE '`+BucketClosed+`'
 		        END AS bucket
 		   FROM recovery_sessions rs

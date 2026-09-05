@@ -115,7 +115,8 @@ HTTPS URL, which would mean hosting or a tunnel. Vasuli signs its own
 webhook requests locally instead: the secret is a string you choose, shared
 between the server and the `curl` that sends the event. The verification
 path exercised is identical either way, without the external dependency.
-See `docs/demo.md` Step 5.
+See [the webhook section of the API reference](api.md) for the exact
+signing procedure.
 
 ---
 

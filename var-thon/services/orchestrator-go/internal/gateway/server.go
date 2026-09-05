@@ -28,8 +28,9 @@ const fallbackOutcome = "UNCLEAR"
 // inference stream is half-closed. Budget, from measured latencies: an
 // in-flight utterance must drain first (~3.0s worst case observed), then
 // the classification inference itself (~1.5s with full conversation
-// history), plus transport. 5s covers that with headroom and stays within
-// the "call ends to audit_log updated" target in docs/demo.md.
+// history), plus transport. 5s covers that with headroom and keeps the
+// whole teardown, from the caller hanging up to the outcome landing in the
+// audit log, inside the 5s budget the recovery orchestrator is held to.
 //
 // This is now the only bound on that wait: the inference context no longer
 // derives from the caller's stream, so gRPC will not cancel it for us.
@@ -111,7 +112,7 @@ func (s *Server) resolveProfile(sessionID string) (*config.AgentProfile, bool) {
 func (s *Server) StreamAudio(stream gatewaypb.Gateway_StreamAudioServer) error {
 	first, err := stream.Recv()
 	if err != nil {
-		return fmt.Errorf("gateway: failed to recieve initial event: %v", err)
+		return fmt.Errorf("gateway: failed to receive initial event: %v", err)
 	}
 
 	control := first.GetControl()

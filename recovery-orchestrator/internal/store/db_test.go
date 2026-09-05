@@ -193,8 +193,12 @@ func TestRecordOutcomeLeavesUnsetFieldsAlone(t *testing.T) {
 	}
 
 	// A later recovery carries no promise date; the original must survive.
-	if err := db.MarkRecovered(sess.ID); err != nil {
+	changed, err := db.MarkRecovered(sess.ID)
+	if err != nil {
 		t.Fatalf("mark recovered: %v", err)
+	}
+	if !changed {
+		t.Fatal("MarkRecovered reported no change on a session that was not yet recovered")
 	}
 
 	updated, _ := db.GetSessionByID(sess.ID)

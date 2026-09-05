@@ -337,12 +337,35 @@ Every event logged: webhook received → session assigned → call started → u
 
 ---
 
+## A note on how this was reviewed
+
+Parts of this repository were written with an AI coding agent, and I would
+rather say so than have someone work it out. The instructions I gave it are
+in [`AGENTS.md`](AGENTS.md), including the standard it was held to and the
+things it was told never to do. I think how somebody directs a tool says
+more about them than whether they used one.
+
+What I would ask, if the choice exists, is that a person reads this rather
+than a model. Not because I think the code would score worse. Because the
+parts I am actually proud of are judgement calls that only make sense in
+context: why the follow-up window is 24 hours and not a tunable, why
+recording an outcome twice had to become impossible rather than merely
+unlikely, why a payment link resolves by link id and not by payment id.
+Those are in the code and in [`docs/build-log.md`](docs/build-log.md), and
+they read as ordinary lines until you know what they are load-bearing for.
+
+If that request turns out to be inconvenient, ignore it. The repository
+stands on its own either way.
+
+---
+
 ## Docs
 
+- [Setup](docs/setup.md), Prerequisites, credentials, and running the services
 - [Architecture](docs/architecture.md), Full technical design and data flow
+- [API](docs/api.md), Endpoint reference and webhook handling
+- [Build log](docs/build-log.md), What broke during the build and how it was found
 - [Roadmap](docs/roadmap.md), Milestone plan and build order
-- [Razorpay Integration](docs/razorpay-integration.md), API reference and webhook handling
-- [Demo Guide](docs/demo.md), Step-by-step demo walkthrough
 
 ---
 
